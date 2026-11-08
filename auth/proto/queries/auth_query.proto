@@ -1912,6 +1912,19 @@ message ListOrgHostRowsResp {
   repeated OrgHostRow hosts = 1;
 }
 
+message ListOrgEmailProofPolicyRowsReq {
+  option (w17.contrib.plugin_feature) = "org_email_proof_policy";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListOrgEmailProofPolicyRowsResp {
+  option (w17.contrib.plugin_feature) = "org_email_proof_policy";
+  repeated OrgEmailProofPolicyRow policies = 1;
+}
+message OrgEmailProofPolicyRow {
+  option (w17.contrib.plugin_feature) = "org_email_proof_policy";
+  string floor = 1;
+  google.protobuf.Timestamp set_at = 2;
+}
 message ListOrgTwoFactorPolicyRowsReq {
   option (w17.contrib.plugin_feature) = "org_two_factor_policy";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -4473,6 +4486,22 @@ service AuthQuery {
           "FROM @module.OrgTwoFactorPolicy p "
           "WHERE p.org_id = :org_id AND p.ended_at IS NULL "
           "ORDER BY p.kind ASC"
+      }
+    };
+  }
+
+  // ListOrgEmailProofPolicyRows — an organization's live address-proof floor
+  // (one row at most). Read on every acceptance of an invitation into the
+  // organization and on every registration its host takes.
+  rpc ListOrgEmailProofPolicyRows(ListOrgEmailProofPolicyRowsReq) returns (ListOrgEmailProofPolicyRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_email_proof_policy";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT p.floor AS floor, p.set_at AS set_at "
+          "FROM @module.OrgEmailProofPolicy p "
+          "WHERE p.org_id = :org_id AND p.ended_at IS NULL"
       }
     };
   }

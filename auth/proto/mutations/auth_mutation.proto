@@ -2274,6 +2274,25 @@ message EndOrgProductPlanAssignmentRowResp {
   string id = 1;
 }
 
+message SetOrgEmailProofPolicyRowReq {
+  option (w17.contrib.plugin_feature) = "org_email_proof_policy";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+  string floor  = 2 [(w17.field) = { type: CHAR, max_len: 16 }];
+  string set_by = 3 [(w17.field) = { type: UUID, null: true }];
+}
+message SetOrgEmailProofPolicyRowResp {
+  option (w17.contrib.plugin_feature) = "org_email_proof_policy";
+  string id = 1;
+}
+message EndOrgEmailProofPolicyRowReq {
+  option (w17.contrib.plugin_feature) = "org_email_proof_policy";
+  string org_id   = 1 [(w17.field) = { type: UUID }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true }];
+}
+message EndOrgEmailProofPolicyRowResp {
+  option (w17.contrib.plugin_feature) = "org_email_proof_policy";
+  string id = 1;
+}
 message SetOrgTwoFactorPolicyRowReq {
   option (w17.contrib.plugin_feature) = "org_two_factor_policy";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -6208,6 +6227,40 @@ service AuthMutation {
         dql:
           "UPDATE @module.OrgTwoFactorPolicy SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
           "WHERE org_id = :org_id AND kind = :kind AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // SetOrgEmailProofPolicyRow — a new live address-proof floor for an
+  // organization; the caller ends the live one first
+  // (EndOrgEmailProofPolicyRow) in the same transaction, and the unique index
+  // refuses a racing second.
+  rpc SetOrgEmailProofPolicyRow(SetOrgEmailProofPolicyRowReq) returns (SetOrgEmailProofPolicyRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_email_proof_policy";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.OrgEmailProofPolicy SET "
+          "org_id = :org_id, "
+          "floor = :floor, "
+          "set_by = :set_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // EndOrgEmailProofPolicyRow — ends an organization's live address-proof
+  // floor; nothing is deleted.
+  rpc EndOrgEmailProofPolicyRow(EndOrgEmailProofPolicyRowReq) returns (EndOrgEmailProofPolicyRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_email_proof_policy";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgEmailProofPolicy SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE org_id = :org_id AND ended_at IS NULL "
           "RETURNING id AS id"
       }
     };

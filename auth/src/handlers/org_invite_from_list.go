@@ -39,7 +39,7 @@ func (h *AuthServiceHandler) AcceptMyOrgInvite(ctx context.Context, req *pb.Acce
 		return nil, err
 	}
 	orgID, tokenHash := found.GetOrgId(), found.GetTokenHash()
-	if err := inviteVerifiedEmailGate(ctx, h, userID, false); err != nil {
+	if err := inviteVerifiedEmailGate(ctx, h, userID, orgID, false); err != nil {
 		return nil, err
 	}
 	var resp *pb.AcceptOrgInviteResp

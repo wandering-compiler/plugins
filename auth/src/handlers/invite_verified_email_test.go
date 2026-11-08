@@ -65,7 +65,7 @@ func TestEmailProofGate_FullRefusesAnUnprovenAccount(t *testing.T) {
 	m := &verifiedMock{verified: false}
 	h := &AuthServiceHandler{Query: m, Mutation: m, EmailProofRequired: emailProofFull}
 
-	err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", false)
+	err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", "", false)
 	if err == nil {
 		t.Fatal("an account that never proved its address accepted an invitation " +
 			"addressed to that address")
@@ -80,7 +80,7 @@ func TestEmailProofGate_FullAllowsASelfConfirmedAccount(t *testing.T) {
 	m := &verifiedMock{verified: true}
 	h := &AuthServiceHandler{Query: m, Mutation: m, EmailProofRequired: emailProofFull}
 
-	if err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", false); err != nil {
+	if err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", "", false); err != nil {
 		t.Errorf("a verified account was refused: %v", err)
 	}
 }
@@ -94,7 +94,7 @@ func TestEmailProofGate_NoneChangesNothing(t *testing.T) {
 	m := &verifiedMock{verified: false}
 	h := &AuthServiceHandler{Query: m, Mutation: m, EmailProofRequired: emailProofNone}
 
-	if err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", false); err != nil {
+	if err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", "", false); err != nil {
 		t.Errorf("the gate fired with the floor at none: %v", err)
 	}
 }
@@ -109,7 +109,7 @@ func TestEmailProofGate_RefusalIsActionableAndLeaksNothing(t *testing.T) {
 	m := &verifiedMock{verified: false}
 	h := &AuthServiceHandler{Query: m, Mutation: m, EmailProofRequired: emailProofFull}
 
-	err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", false)
+	err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", "", false)
 	st, _ := status.FromError(err)
 	var detail *w17pb.ErrorDetail
 	for _, d := range st.Details() {

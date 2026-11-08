@@ -130,7 +130,7 @@ func TestSignUpGates_OpenPolicyAndInvitation(t *testing.T) {
 	m := signupFixture()
 	h := &AuthServiceHandler{Query: m, InviteOnly: true}
 	ctx := registrationVia("host,default", "client", "acme.example.com")
-	join, err := signupGates(ctx, h, "new@example.com", "", "")
+	join, err := signupGates(ctx, h, "new@example.com", "", "", false)
 	if err != nil || join == nil || join.orgID != "org-acme" {
 		t.Fatalf("open policy under invite_only: join %+v, err %v", join, err)
 	}
@@ -138,11 +138,11 @@ func TestSignUpGates_OpenPolicyAndInvitation(t *testing.T) {
 	saved := signupInviteGate
 	signupInviteGate = func(context.Context, *AuthServiceHandler, string, string) error { called = true; return nil }
 	defer func() { signupInviteGate = saved }()
-	if join, err := signupGates(ctx, h, "new@example.com", "invite-token", ""); err != nil || join != nil || !called {
+	if join, err := signupGates(ctx, h, "new@example.com", "invite-token", "", false); err != nil || join != nil || !called {
 		t.Errorf("with an invitation: join %+v, err %v, invite gate called %v", join, err, called)
 	}
 	called = false
-	if join, err := signupGates(registrationVia("host,default", "partner", "acme.example.com"), h, "new@example.com", "", ""); err != nil || join != nil || !called {
+	if join, err := signupGates(registrationVia("host,default", "partner", "acme.example.com"), h, "new@example.com", "", "", false); err != nil || join != nil || !called {
 		t.Errorf("no policy: join %+v, err %v, invite gate called %v — invite_only must decide", join, err, called)
 	}
 }
@@ -294,14 +294,14 @@ func TestSignUpGates_ABodyHostFromEachRequest(t *testing.T) {
 	}
 	m := signupFixture()
 	h := &AuthServiceHandler{Query: m, InviteOnly: true}
-	join, err := signupGates(context.Background(), h, "new@example.com", "", "acme.example.com")
+	join, err := signupGates(context.Background(), h, "new@example.com", "", "acme.example.com", false)
 	if err != nil || join == nil || join.orgID != "org-acme" {
 		t.Fatalf("body host under invite_only: join %+v, err %v", join, err)
 	}
 	saved := signupInviteGate
 	signupInviteGate = func(context.Context, *AuthServiceHandler, string, string) error { return nil }
 	defer func() { signupInviteGate = saved }()
-	if join, err := signupGates(context.Background(), h, "new@example.com", "invite-token", "acme.example.com"); err != nil || join != nil {
+	if join, err := signupGates(context.Background(), h, "new@example.com", "invite-token", "acme.example.com", false); err != nil || join != nil {
 		t.Errorf("an invitation with a body host: join %+v, err %v — the invitation decides", join, err)
 	}
 }

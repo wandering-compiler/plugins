@@ -38,6 +38,11 @@ type keepsCallerGrants interface{ keepsCallerGrants() }
 // default, which is what the activation without the feature reads.
 type keepsTwoFactorPolicies interface{ keepsTwoFactorPolicies() }
 
+// keepsEmailProofPolicies is keepsTwoFactorPolicies for the organizations'
+// address-proof floors (org_email_proof_policy): a store that does not keep
+// them gets the activation's email_proof_required.
+type keepsEmailProofPolicies interface{ keepsEmailProofPolicies() }
+
 func TestMain(m *testing.M) {
 	// Follow-up work after an answer (a reset link's mint) runs inline, so a
 	// test reads its effect right after the call. The detachment itself has
@@ -67,6 +72,13 @@ func TestMain(m *testing.M) {
 			return h.defaultTwoFactorPolicy(), nil
 		}
 		return policyOf(ctx, h, userID, enrol)
+	}
+	floorOf := emailProofFloorOf
+	emailProofFloorOf = func(ctx context.Context, h *AuthServiceHandler, orgID string) (string, error) {
+		if _, ok := h.Query.(keepsEmailProofPolicies); !ok {
+			return normalizedFloor(h), nil
+		}
+		return floorOf(ctx, h, orgID)
 	}
 	os.Exit(m.Run())
 }

@@ -941,12 +941,26 @@ func normalizedFloor(h *AuthServiceHandler) string {
 	return strings.TrimSpace(strings.ToLower(h.EmailProofRequired))
 }
 
+// emailProofFloorOf is the floor an address must reach to become a member of
+// orgID: the activation's email_proof_required, or with
+// org_email_proof_policy the organization's own (org_email_proof_policy.go).
+// Every way into an organization reads it — an invitation's acceptance and a
+// registration on the organization's host — so the two cannot disagree.
+var emailProofFloorOf = func(_ context.Context, h *AuthServiceHandler, _ string) (string, error) {
+	return normalizedFloor(h), nil
+}
+
+// floorAsksProof reports whether a floor asks anything at all.
+func floorAsksProof(floor string) bool {
+	return floor != "" && floor != emailProofNone
+}
+
 // emailProofEnforced is set when the gate above is the real one
 // (email_verification staged). Without it the floor cannot be read — the
 // column it reads does not exist — so a floor above `none` refuses to boot.
 var emailProofEnforced bool
 
-var inviteVerifiedEmailGate = func(_ context.Context, _ *AuthServiceHandler, _ string, _ bool) error {
+var inviteVerifiedEmailGate = func(_ context.Context, _ *AuthServiceHandler, _, _ string, _ bool) error {
 	return nil
 }
 
@@ -1057,17 +1071,41 @@ var signupOrgJoin func(txCtx context.Context, h *AuthServiceHandler, userID stri
 // refuse it, or say nothing — and only when it says nothing does
 // invite_only decide. The join it returns is written by the caller inside
 // the account's transaction (joinSignedUpOrg).
-func signupGates(ctx context.Context, h *AuthServiceHandler, email, inviteToken, bodyHost string) (*orgJoin, error) {
+//
+// proves says the registration proves the address itself — a
+// sign_up_confirmation code before the account exists, an OAuth provider's
+// email_verified. A host's organization whose floor asks a proof takes a
+// registration only with one: an open registration says anybody may join,
+// not that the address is theirs, and no invitation derived anything here.
+func signupGates(ctx context.Context, h *AuthServiceHandler, email, inviteToken, bodyHost string, proves bool) (*orgJoin, error) {
 	if inviteToken == "" && signupOrgDecide != nil {
 		join, err := signupOrgDecide(ctx, h, bodyHost)
 		if err != nil {
 			return nil, err
 		}
 		if join != nil {
+			if err := signupJoinFloorGate(ctx, h, join.orgID, proves); err != nil {
+				return nil, err
+			}
 			return join, nil
 		}
 	}
 	return nil, signupInviteGate(ctx, h, email, inviteToken)
+}
+
+// signupJoinFloorGate refuses a registration the host's organization would
+// take openly when its floor asks a proof the registration does not make.
+// Before anything is written: the account is not created half-admitted.
+func signupJoinFloorGate(ctx context.Context, h *AuthServiceHandler, orgID string, proves bool) error {
+	floor, err := emailProofFloorOf(ctx, h, orgID)
+	if err != nil {
+		return err
+	}
+	if !floorAsksProof(floor) || proves {
+		return nil
+	}
+	return refusal(ctx, codes.FailedPrecondition, "sign up: the organization's email proof floor is "+floor+" and this registration proves no address",
+		CodeSignUpEmailProofRequired, "", MsgSignUpEmailProofRequired, nil)
 }
 
 // joinSignedUpOrg writes signupGates' join, if any, for the new account.

@@ -481,7 +481,7 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 | `email_verification/stamp-and-proof-agree` | A verification MUST set `email_verified_at` and `email_proof = SELF_CONFIRMED` in one statement. | Consistency & concurrency | `TestVerifyEmail_ValidToken_MarksVerified` (asserts that `MarkEmailVerified` is called, not what the DQL writes) |
 | `email_verification/derived-never-downgrades` | Marking an address `DERIVED_FROM_INVITE` MUST NOT lower a `SELF_CONFIRMED` address. | Consistency & concurrency | `TestAcceptOrgInvite_BoundRecordsDerivedAndOpenDoesNot` (caller side). The guard sits in the DQL WHERE clause and is **unit (mock) only**. |
 | `email_verification/proof-bound-to-address` | A proof MUST certify the address it was delivered to. Changing `User.email` MUST reset both `email_verified_at` and `email_proof`, and MUST void every outstanding verification token. | Security | none (see gaps 1 and 2) |
-| `email_verification/floor-enforced` | When `email_proof_required` is `derived` or `full`, an acceptance below the floor MUST be refused with `EMAIL_NOT_VERIFIED`, without revealing whether the invitation exists and without consuming it. | Security | `TestEmailProofGate_FullRefusesAnUnprovenAccount`, `TestEmailProofGate_FullAllowsASelfConfirmedAccount`, `TestEmailProofGate_NoneChangesNothing`, `TestEmailProofGate_RefusalIsActionableAndLeaksNothing`, `TestEmailProofGate_DerivedFloorSeparatesBoundFromOpen`, `TestEmailProofGate_AlreadyDerivedSatisfiesDerivedButNotFull`, `TestAcceptOrgInvite_ARefusedAcceptanceDoesNotConsumeTheInvitation` |
+| `email_verification/floor-enforced` | When the floor of the organization joined (`email_proof_required`, or the organization's own with `org_email_proof_policy`) is `derived` or `full`, an acceptance below the floor MUST be refused with `EMAIL_NOT_VERIFIED`, without revealing whether the invitation exists and without consuming it. | Security | `TestEmailProofGate_FullRefusesAnUnprovenAccount`, `TestEmailProofGate_FullAllowsASelfConfirmedAccount`, `TestEmailProofGate_NoneChangesNothing`, `TestEmailProofGate_RefusalIsActionableAndLeaksNothing`, `TestEmailProofGate_DerivedFloorSeparatesBoundFromOpen`, `TestEmailProofGate_AlreadyDerivedSatisfiesDerivedButNotFull`, `TestAcceptOrgInvite_ARefusedAcceptanceDoesNotConsumeTheInvitation` |
 | `email_verification/floor-config-fails-boot` | An `email_proof_required` value other than `none`, `derived` or `full`, or a value above `none` in an activation without this feature, MUST fail boot. | Failure & configuration | none (see gap 3) |
 
 **Gaps / suspected defects**
@@ -896,6 +896,30 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | org_two_factor_policy/org-as-authenticate | The organization of a sign-in MUST be the one Authenticate would choose (host, selector, sole membership); a selector conflicting with the host MUST refuse. | Security | `TestTwoFactorPolicy_TheOrganizationOverridesPerKind`, `TestTwoFactorPolicy_AConflictingSelectorRefuses` |
 | org_two_factor_policy/acl-gated | Every policy method MUST be refused unless the endpoint ACL gates it; the backoffice's MUST be refused from inside an organization; the organization's MUST act in the active organization only. | Security | `TestSetOrgTwoFactorPolicy`, `TestSetMyOrgTwoFactorPolicy` |
 | org_two_factor_policy/values | A policy MUST be one of required, enrol, optional, disabled; enrol MUST be refused without `two_factor_enrolment` or with `two_factor_totp=false`; a kind MUST be `''` where memberships have no kinds. | Correctness | `TestSetOrgTwoFactorPolicy`, `TestEnrolAtSignIn_EnrolNeedsTheBuiltInAuthenticator`, `TestEnrolAtSignIn_WithoutTheFeatureEnrolDoesNotHold` |
+
+### org_email_proof_policy
+
+**Purpose.** An organization's own address-proof floor — `none`, `derived` or `full`, the values of `email_proof_required` — over the activation's. An organization that admits only proven addresses holds every way in to it, not only an invitation: an open registration says anybody may join, and a proof says the address is theirs, which are two different things.
+
+**Adds**
+- Table `OrgEmailProofPolicy` (org_id, floor, set_by/at, ended_by/at, ended_key): one live floor per organization; replacing or clearing ends the row; nothing is deleted.
+- Business: `SetOrgEmailProof`, `ClearOrgEmailProof`, `GetOrgEmailProof` (the backoffice's, realm-wide; `PUT` / `GET /auth/admin/orgs/{org_id}/email-proof`, `POST …/clear`) and `SetMyOrgEmailProof`, `ClearMyOrgEmailProof`, `GetMyOrgEmailProof` (the organization's, from inside it; `PUT` / `GET /auth/orgs/{org}/email-proof`, `POST …/clear`). A get answers the activation's default beside the organization's own.
+- Errors `EMAIL_PROOF_POLICIES_REALM_ONLY` (403), `EMAIL_PROOF_POLICY_INVALID` (400).
+
+**Which floor applies.** The organization the address is about to join: the invitation's, or the one whose host takes the registration (`org_signup`). Its own floor, else the activation's `email_proof_required`. With or without this feature, that floor holds on both ways in:
+- accepting an invitation (`AcceptOrgInvite`, `AcceptMyOrgInvite`, an invitation taken at registration) — refused with `EMAIL_NOT_VERIFIED` below it, as before;
+- registering on the organization's host through an open policy — no invitation derived anything there, so any floor above `none` takes only a registration that proves the address itself (a `sign_up_confirmation` code, an OAuth provider's `email_verified`). Otherwise it is refused before anything is written, with `SIGNUP_EMAIL_PROOF_REQUIRED` (412).
+
+**Who sets it.** The backoffice realm-wide and the organization from inside itself — both only where the project's endpoint ACL gates the method: a method nobody gates is refused, because otherwise any member could lower the floor.
+
+**Requires / conflicts / combined files.** Requires `email_verification` and `org_membership`. Go file: `handlers/org_email_proof_policy.go`.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| org_email_proof_policy/org-then-default | The floor MUST be the organization's own, else the activation's `email_proof_required`. | Security | `TestEmailProofFloor_TheOrganizationsOwnOverTheDefault` |
+| org_email_proof_policy/every-way-in | A registration an organization's host takes openly MUST be refused under a floor above `none` unless it proves the address itself, before anything is written; an invitation's acceptance MUST be held to the same floor. | Security | `TestEmailProofFloor_ARegistrationOnTheHostNeedsItsOwnProof`, `TestEmailProofFloor_TheOrganizationsOwnOverTheDefault`, `TestEmailProofFloor_AnInvitationAtRegistration` |
+| org_email_proof_policy/acl-gated | Every floor method MUST be refused unless the endpoint ACL gates it; the backoffice's MUST be refused from inside an organization; the organization's MUST act in the active organization only. | Security | `TestSetOrgEmailProof`, `TestSetMyOrgEmailProof` |
+| org_email_proof_policy/values | A floor MUST be one of none, derived, full. | Correctness | `TestSetOrgEmailProof`, `TestSetMyOrgEmailProof` |
 
 ### two_factor_enrolment
 
