@@ -1,5 +1,36 @@
 # payment — changelog
 
+## 0.1.0-rc.9
+
+### Every amount is an int64 MONEY at scale 4 (read first)
+
+Every monetary value — every column, request, response and event field — is `int64` with `(w17.field) = { type: MONEY, scale: 4 }`: an exact count of ten-thousandths of the major unit, stored as `BIGINT`. 19.99 is `199900`, 5 JPY is `50000`, 5.120 KWD is `51200`. It replaces the decimal strings of the `DECIMAL(20, 4)` columns: a caller sends `amount: 199900` where it sent `"19.99"`, and reads the same unit back (on the JSON wire an int64 is a string of the integer, `"199900"`). `RefundPaymentReq.amount` 0 is a full refund, as an empty string was. The handlers' arithmetic is integer arithmetic that refuses to overflow (`InvalidArgument`) instead of wrapping, and a credit grant that would carry a balance past the range is refused with nothing written.
+
+Before you deploy it, generate and apply the migration as for any schema change. It converts the existing `NUMERIC(20, 4)` columns in place, rewriting every stored value to ten-thousandths (`CAST(ROUND(col * 10000) AS BIGINT)` on PostgreSQL; an `UPDATE` before the `MODIFY` on MySQL), with no decision to make, and its down converts them back. Scale 4 is the columns' own, so no value is rounded.
+
+An amount whose row carries its currency names it with `currency_field` (`Payment.amount` and `currency`, `received_amount` and `received_currency`, `Refund`, `Dispute`, `Plan`, and the requests, responses and events that carry a currency), so the admin and the generated clients render it as money in that currency. The credit tables — `CreditLedger.delta`, `CreditBalance.balance`, `CreditTopup.amount` and `credit_owed` — have no currency column and render as a plain number: credit is charged in the activation's `default_currency`, but `MONEY` takes its currency only from a code written in the proto or a sibling column, never from plugin configuration.
+
+### Three-decimal currencies are charged, exactly
+
+The Stripe driver converts a scale-4 amount to the currency's own minor units exactly: ÷100 for a two-decimal currency, ÷10000 for a zero-decimal one (×100 again for ISK and UGX, which Stripe takes as two-decimal values), and ÷10 for BHD, JOD, KWD, OMR and TND, which it now charges instead of refusing them. An amount that does not convert exactly — a fraction of a cent or of a yen, a fraction of a whole ISK or UGX, or a three-decimal amount that is not a multiple of ten of its minor unit, which is how Stripe takes those — is refused as `InvalidArgument` before the provider is asked, never rounded.
+
+A webhook amount the driver cannot convert back to ten-thousandths exactly does not fail the event's parse: an authentic event is never answered as unsigned. A dispute or a payment success whose amount did not convert is refused (`FailedPrecondition`, so the provider redelivers it) and nothing is recorded; an event that reads no amount is acknowledged as before.
+
+### A refund of a mismatched payment needs the amount it took
+
+`LockPaymentForRefundResp.received_amount` and `received_currency` are declared `(w17.field).null`: the columns are recorded only for a payment held at `AMOUNT_MISMATCH`, and a generated query that can fill a field with SQL NULL must now say so. `refundAllowed` refuses (`FailedPrecondition`) a payment held at `AMOUNT_MISMATCH` that records no received amount, instead of judging the refund against an empty one.
+
+### Organization, not tenant
+
+- The documentation, comments and tests say organization where they said tenant. No
+  behaviour changes.
+
+### The references between the plugin's own tables are foreign keys
+
+`Payment.customer_id`, `Refund.payment_id`, `Dispute.payment_id`, `Subscription.customer_id` and `Subscription.plan_id` now carry a foreign key to the row they name (`fk: "@module.<Model>"`, expanded to the activation's own table), `ON DELETE RESTRICT` (`deletion_rule: BLOCK`): the plugin deletes nothing, so a delete that would strand one is refused, and a write naming a missing row answers `InvalidArgument` ("referenced record does not exist") instead of being stored. The `user_id` columns stay without one: the account lives in the auth activation's table, which a plugin cannot name.
+
+Before you deploy it, check for rows the keys refuse: apply with `migrate apply --checks` (or `W17_MIGRATE_CHECKS=1`), and a database holding such a row refuses the migration by the check's name before any of it runs. Each check is `SELECT count(*) FROM <child> WHERE <col> NOT IN (SELECT id FROM <parent>)`. Give a missing parent a row back rather than deleting the child.
+
 ## 0.1.0-rc.8
 
 ### Every write returns its whole row
