@@ -101,10 +101,8 @@ func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.Cl
 		attr = "W17_MARKETING_CONSENT"
 	}
 	attributes := gen.FeatureBrevoAttributes && writeActivity != nil
-	if err := deliveryChosen(gen.FeatureBrevoEvents, attributes); err != nil {
-		return err
-	}
-	t := &brevoTool{client: client, sel: sel, consentAttr: attr, events: gen.FeatureBrevoEvents, attributes: attributes, query: clients.MarketingQuery(), mutation: clients.MarketingMutation()}
+	events := sendsEvents(gen.FeatureBrevoEvents, attributes)
+	t := &brevoTool{client: client, sel: sel, consentAttr: attr, events: events, attributes: attributes, query: clients.MarketingQuery(), mutation: clients.MarketingMutation()}
 	if err := registry.RegisterMarketingConsumer("brevo", t); err != nil {
 		return err
 	}
@@ -130,17 +128,11 @@ func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.Cl
 	return nil
 }
 
-// deliveryChosen refuses a brevo activation that names neither way for the
-// records to reach Brevo: it would boot, keep the contacts, and send nothing
-// anyone asked for — which is what an activation from before brevo_events
-// existed would silently become.
-func deliveryChosen(events, attributes bool) error {
-	if events || attributes {
-		return nil
-	}
-	return fmt.Errorf("marketing plugin: brevo is on, and neither brevo_events nor brevo_attributes: no request would reach Brevo\n" +
-		"  fix: add brevo_events (each request as an event; what brevo alone did before), brevo_attributes (each request as a date attribute on the contact, for Brevo's automations), or both to the activation's features")
-}
+// sendsEvents reports whether the records go to Brevo as events. brevo_events
+// and brevo_attributes say how they reach Brevo; an activation that names
+// neither keeps what brevo did before they existed — events — so naming only
+// brevo_attributes is how events are turned off.
+func sendsEvents(events, attributes bool) bool { return events || !attributes }
 
 // contactAttributes are the contact attributes the plugin writes.
 func (t *brevoTool) contactAttributes() []attributeDef {

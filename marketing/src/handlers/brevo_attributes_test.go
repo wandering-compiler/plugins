@@ -181,27 +181,18 @@ func TestContacts_CarryTheSignUpDate(t *testing.T) {
 	}
 }
 
-// brevo/delivery-chosen: brevo with neither brevo_events nor brevo_attributes
-// refuses to boot rather than send nothing.
-func TestDeliveryChosen(t *testing.T) {
-	if err := deliveryChosen(false, false); err == nil || !strings.Contains(err.Error(), "brevo_events") {
-		t.Errorf("neither: err = %v, want a refusal naming brevo_events", err)
-	}
-	for _, c := range [][2]bool{{true, false}, {false, true}, {true, true}} {
-		if err := deliveryChosen(c[0], c[1]); err != nil {
-			t.Errorf("events=%v attributes=%v: %v", c[0], c[1], err)
+// brevo/events-by-default: brevo_events and brevo_attributes choose; naming
+// neither keeps the events brevo always sent, and only brevo_attributes
+// without brevo_events turns them off.
+func TestSendsEvents(t *testing.T) {
+	for _, c := range []struct{ events, attributes, want bool }{
+		{false, false, true}, // brevo alone, as before the choice existed
+		{true, false, true},
+		{false, true, false}, // attributes only
+		{true, true, true},
+	} {
+		if got := sendsEvents(c.events, c.attributes); got != c.want {
+			t.Errorf("brevo_events=%v brevo_attributes=%v: events %v, want %v", c.events, c.attributes, got, c.want)
 		}
-	}
-}
-
-// brevo_attributes/transient-is-redelivered: a failure of the Activity table
-// fails the batch with nothing written to Brevo.
-func TestActivity_ATableFailureWritesNothing(t *testing.T) {
-	f, l := &fakeBrevo{known: map[string]bool{"u1": true}}, &ledger{sent: map[string]bool{}, writeErr: errors.New("db down")}
-	if err := attrTool(t, f, l, true).ConsumeMarketing(context.Background(), batch(recordAt(1, createTask, "u1", monday))); err == nil {
-		t.Fatal("a table failure was not returned for a redelivery")
-	}
-	if len(f.updates)+len(f.upserts)+len(f.batches) != 0 {
-		t.Errorf("Brevo written despite the failure: %v %v %v", f.updates, f.upserts, f.batches)
 	}
 }

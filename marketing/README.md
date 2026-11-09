@@ -22,12 +22,12 @@ plugins: [
 ```
 
 **Events, attributes or both.** `brevo` keeps the contacts; how each request
-reaches Brevo is a second feature, and at least one is required (`brevo` alone
-refuses to boot):
+reaches Brevo is a second feature. Naming neither sends events, as `brevo`
+always did:
 
 | features | each request becomes | for |
 |---|---|---|
-| `brevo`, `brevo_events` | an event on the contact, with the request's context | history, segments on what a request carried (organization, account type, UTM) |
+| `brevo`, `brevo_events` (or `brevo` alone) | an event on the contact, with the request's context | history, segments on what a request carried (organization, account type, UTM) |
 | `brevo`, `brevo_attributes` | the date of its method on the contact (`W17_TASKSBUSINESS_CREATETASK`), and `W17_LAST_ACTIVITY_AT` | Brevo's automations and segments, which start from contact attributes ("signed up 7 days ago and never created a task") |
 | all three | both | |
 
