@@ -30,10 +30,12 @@ type fakeBrevo struct {
 	upserts []string // "<ext>|<email>|<attrs>|bl=<emailBlacklisted>"
 	updates []string // "<ext>|<attrs>|bl=<emailBlacklisted>"
 	known   map[string]bool
-	mu      sync.Mutex // guards ensured (written by a goroutine)
+	mu      sync.Mutex // guards ensured and ensureFails (a goroutine's)
 	ensured []string
-	deletes []string
-	callErr error
+	// ensureFails: how many more times each attribute's creation fails.
+	ensureFails map[string]int
+	deletes     []string
+	callErr     error
 	// contacts is the account's listing (ListContacts), oldest first.
 	contacts []brevo.Contact
 	listErr  error
@@ -138,6 +140,10 @@ func (f *fakeBrevo) EnsureAttribute(_ context.Context, name, typ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ensured = append(f.ensured, name+":"+typ)
+	if f.ensureFails[name] > 0 {
+		f.ensureFails[name]--
+		return &brevo.Error{Status: 503}
+	}
 	return f.callErr
 }
 
@@ -176,8 +182,13 @@ func (f *fakeBrevo) ListContacts(_ context.Context, offset, limit int) ([]brevo.
 	return page, len(f.contacts), nil
 }
 
-// ledger fakes the plugin's tables: SentEvent, Contact, Reconciliation.
+// ledger fakes the plugin's tables: SentEvent, Contact, Reconciliation,
+// Activity.
 type ledger struct {
+	activity map[string]map[string]time.Time // user → attribute → last_at
+	// afterActivityRead runs once, after the next ListActivity has read: a
+	// record on another replica moving a row while the contact is written.
+	afterActivityRead func()
 	pb.MarketingQueryClient
 	pb.MarketingMutationClient
 	sent     map[string]bool
@@ -189,6 +200,57 @@ type ledger struct {
 	// beforeConsentWrite runs once, inside the next SetContactConsent, before
 	// it writes: another delivery landing in between.
 	beforeConsentWrite func()
+}
+
+func (l *ledger) RecordActivity(_ context.Context, in *pb.ActivityReq, _ ...grpc.CallOption) (*pb.ActivityWriteResp, error) {
+	if l.writeErr != nil {
+		return nil, l.writeErr
+	}
+	if l.activity == nil {
+		l.activity = map[string]map[string]time.Time{}
+	}
+	if l.activity[in.GetUserId()] == nil {
+		l.activity[in.GetUserId()] = map[string]time.Time{}
+	}
+	if _, ok := l.activity[in.GetUserId()][in.GetAttribute()]; !ok {
+		l.activity[in.GetUserId()][in.GetAttribute()] = in.GetLastAt().AsTime()
+	}
+	return &pb.ActivityWriteResp{}, nil
+}
+
+// BumpActivity is conditional, as its statement: only a later date.
+func (l *ledger) BumpActivity(_ context.Context, in *pb.ActivityReq, _ ...grpc.CallOption) (*pb.ActivityMovedResp, error) {
+	if l.writeErr != nil {
+		return nil, l.writeErr
+	}
+	at, ok := l.activity[in.GetUserId()][in.GetAttribute()]
+	if !ok || !at.Before(in.GetLastAt().AsTime()) {
+		return nil, status.Error(codes.NotFound, "no rows")
+	}
+	l.activity[in.GetUserId()][in.GetAttribute()] = in.GetLastAt().AsTime()
+	return &pb.ActivityMovedResp{UserId: in.GetUserId()}, nil
+}
+
+func (l *ledger) EraseActivity(_ context.Context, in *pb.EraseActivityReq, _ ...grpc.CallOption) (*pb.ActivityWriteResp, error) {
+	if l.writeErr != nil {
+		return nil, l.writeErr
+	}
+	delete(l.activity, in.GetUserId())
+	return &pb.ActivityWriteResp{}, nil
+}
+
+func (l *ledger) ListActivity(_ context.Context, in *pb.ListActivityReq, _ ...grpc.CallOption) (*pb.ListActivityResp, error) {
+	out := &pb.ListActivityResp{}
+	for _, u := range in.GetUserIds() {
+		for a, at := range l.activity[u] {
+			out.Rows = append(out.Rows, &pb.ActivityRow{UserId: u, Attribute: a, LastAt: timestamppb.New(at)})
+		}
+	}
+	if f := l.afterActivityRead; f != nil {
+		l.afterActivityRead = nil
+		f()
+	}
+	return out, nil
 }
 
 type reconRow struct {
@@ -382,7 +444,7 @@ func tool(t *testing.T, f *fakeBrevo, l *ledger, send, include, exclude string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &brevoTool{client: f, sel: sel, consentAttr: "W17_MARKETING_CONSENT", query: l, mutation: l}
+	return &brevoTool{client: f, sel: sel, consentAttr: "W17_MARKETING_CONSENT", events: true, query: l, mutation: l}
 }
 
 func record(id byte, method, user string) eventlog.ConsumedRecord {
@@ -591,7 +653,8 @@ func TestContacts_FollowTheAccounts(t *testing.T) {
 	if strings.Join(f.upserts, ";") != "u1|a@x.example|map[]|bl=true" {
 		t.Errorf("upserts = %v", f.upserts)
 	}
-	want := []string{"u1|map[EMAIL:b@x.example]|bl=true", "u1|map[W17_MARKETING_CONSENT:false]|bl=true"}
+	// A decision without decided_at is dated by its handling.
+	want := []string{"u1|map[EMAIL:b@x.example]|bl=true", "u1|map[W17_MARKETING_CONSENT:false W17_MARKETING_CONSENT_AT:" + brevoDate(time.Now()) + "]|bl=true"}
 	if strings.Join(f.updates, ";") != strings.Join(want, ";") {
 		t.Errorf("updates = %v\nwant      %v", f.updates, want)
 	}
@@ -604,23 +667,56 @@ func TestContacts_FollowTheAccounts(t *testing.T) {
 func TestContacts_ConsentBeforeTheContactCreatesIt(t *testing.T) {
 	f := &fakeBrevo{}
 	_ = tool(t, f, &ledger{}, "all", "", "").onConsentChanged(context.Background(), &pb.AuthMarketingConsentChanged{UserId: "u2", Consent: true})
-	if strings.Join(f.upserts, ";") != "u2||map[W17_MARKETING_CONSENT:true]|bl=false" {
+	if strings.Join(f.upserts, ";") != "u2||map[W17_MARKETING_CONSENT:true W17_MARKETING_CONSENT_AT:"+brevoDate(time.Now())+"]|bl=false" {
 		t.Errorf("upserts = %v", f.upserts)
 	}
 }
 
-// The attribute the plugin writes is created, retried until it is: Brevo
-// drops an attribute the account has not created, silently.
+// The attributes the plugin writes are created: Brevo drops an attribute the
+// account has not created, silently. With brevo_attributes, also one date per
+// method the selection sends, and the last activity's time.
 func TestEnsureAttributes(t *testing.T) {
-	f := &fakeBrevo{}
+	for _, c := range []struct {
+		name       string
+		attributes bool
+		send       string
+		want       string
+	}{
+		{"brevo_events", false, "all", "W17_MARKETING_CONSENT:boolean,W17_MARKETING_CONSENT_AT:date,W17_SIGNED_UP_AT:date"},
+		{"brevo_attributes, every method", true, "all", "W17_MARKETING_CONSENT:boolean,W17_MARKETING_CONSENT_AT:date,W17_SIGNED_UP_AT:date," +
+			"W17_LAST_ACTIVITY_AT:text,W17_TASKSBUSINESS_CREATETASK:date,W17_TASKSBUSINESS_GETTASK:date"},
+		{"brevo_attributes, mutations", true, "mutations", "W17_MARKETING_CONSENT:boolean,W17_MARKETING_CONSENT_AT:date,W17_SIGNED_UP_AT:date," +
+			"W17_LAST_ACTIVITY_AT:text,W17_TASKSBUSINESS_CREATETASK:date"},
+	} {
+		f := &fakeBrevo{}
+		tl := tool(t, f, &ledger{}, c.send, "", "")
+		tl.attributes = c.attributes
+		stop := tl.ensureAttributes(time.Millisecond)
+		want := strings.Count(c.want, ",") + 1
+		deadline := time.Now().Add(2 * time.Second)
+		for len(f.ensuredSoFar()) < want && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		stop()
+		if got := strings.Join(f.ensuredSoFar(), ","); got != c.want {
+			t.Errorf("%s: ensured = %v\nwant %v", c.name, got, c.want)
+		}
+	}
+}
+
+// An attribute Brevo did not create is asked for again, and only it.
+func TestEnsureAttributes_RetriesOnlyWhatFailed(t *testing.T) {
+	f := &fakeBrevo{ensureFails: map[string]int{"W17_SIGNED_UP_AT": 2}}
 	stop := tool(t, f, &ledger{}, "all", "", "").ensureAttributes(time.Millisecond)
 	defer stop()
 	deadline := time.Now().Add(2 * time.Second)
-	for len(f.ensuredSoFar()) < 1 && time.Now().Before(deadline) {
+	for len(f.ensuredSoFar()) < 5 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got := strings.Join(f.ensuredSoFar(), ","); got != "W17_MARKETING_CONSENT:boolean" {
-		t.Errorf("ensured = %v", got)
+	time.Sleep(20 * time.Millisecond) // nothing more is asked once all exist
+	want := "W17_MARKETING_CONSENT:boolean,W17_MARKETING_CONSENT_AT:date,W17_SIGNED_UP_AT:date,W17_SIGNED_UP_AT:date,W17_SIGNED_UP_AT:date"
+	if got := strings.Join(f.ensuredSoFar(), ","); got != want {
+		t.Errorf("ensured = %v\nwant %v", got, want)
 	}
 }
 

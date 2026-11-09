@@ -59,13 +59,13 @@ func TestConsent_SetsEmailBlacklistedWithTheAttribute(t *testing.T) {
 	if err := tl.onConsentChanged(ctx, consentEvent("u1", true, day1)); err != nil {
 		t.Fatal(err)
 	}
-	if got := last(f.updates); got != "u1|map[W17_MARKETING_CONSENT:true]|bl=false" {
+	if got := last(f.updates); got != "u1|map[W17_MARKETING_CONSENT:true W17_MARKETING_CONSENT_AT:2026-10-01]|bl=false" {
 		t.Errorf("consent given: %s", got)
 	}
 	if err := tl.onConsentChanged(ctx, consentEvent("u1", false, day2)); err != nil {
 		t.Fatal(err)
 	}
-	if got := last(f.updates); got != "u1|map[W17_MARKETING_CONSENT:false]|bl=true" {
+	if got := last(f.updates); got != "u1|map[W17_MARKETING_CONSENT:false W17_MARKETING_CONSENT_AT:2026-10-02]|bl=true" {
 		t.Errorf("consent withdrawn: %s", got)
 	}
 }
@@ -115,7 +115,7 @@ func TestConsent_AnOlderDecisionDoesNotOverwriteANewerOne(t *testing.T) {
 	if c := l.contacts["u1"]; c.GetConsent() || !c.GetConsentAt().AsTime().Equal(day2) {
 		t.Errorf("state = %+v, want the newer withdrawal kept", c)
 	}
-	if got := last(f.updates); got != "u1|map[W17_MARKETING_CONSENT:false]|bl=true" {
+	if got := last(f.updates); got != "u1|map[W17_MARKETING_CONSENT:false W17_MARKETING_CONSENT_AT:2026-10-02]|bl=true" {
 		t.Errorf("Brevo got %s, want the newer withdrawal", got)
 	}
 }
@@ -463,7 +463,7 @@ func TestConsent_ANoLandingDuringTheSubscribeWins(t *testing.T) {
 	if err := tl.onConsentChanged(ctx, consentEvent("u1", true, day2)); err != nil {
 		t.Fatal(err)
 	}
-	if !f.blacklisted["u1"] || last(f.updates) != "u1|map[W17_MARKETING_CONSENT:false]|bl=true" {
+	if !f.blacklisted["u1"] || last(f.updates) != "u1|map[W17_MARKETING_CONSENT:false W17_MARKETING_CONSENT_AT:2026-10-03]|bl=true" {
 		t.Errorf("Brevo holds blacklisted=%v after %v, want the no to win", f.blacklisted["u1"], f.updates)
 	}
 }

@@ -82,3 +82,27 @@ message Reconciliation {
   google.protobuf.Timestamp claimed_at = 3 [(w17.field) = { type: DATETIME }];
   google.protobuf.Timestamp finished_at = 4 [(w17.field) = { type: DATETIME, null: true }];
 }
+
+// Activity is when a user last made each request the brevo_attributes
+// feature writes to their contact: one row per (user, attribute). The
+// contact attribute is written from the row as stored, and a row only ever
+// moves forward (BumpActivity), so a record redelivered after a newer one —
+// or two replicas at once — never writes an older date over a newer one.
+// Deleted with the account (UserDeleted).
+message Activity {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [ { name: "user_id" }, { name: "attribute" } ] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "brevo_attributes";
+
+  string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  // user_id — auth's user id: the contact's ext_id in the tool.
+  string user_id = 2 [(w17.field) = { type: UUID }];
+  // attribute — the contact attribute the request is written to
+  // (W17_<SERVICE>_<METHOD>).
+  string attribute = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
+  // last_at — when the user last made it (the record's start).
+  google.protobuf.Timestamp last_at = 4 [(w17.field) = { type: DATETIME }];
+}

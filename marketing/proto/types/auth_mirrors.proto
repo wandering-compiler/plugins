@@ -17,8 +17,9 @@ option go_package = "@project;@pkg";
 // auth.UserCreated — a contact is created at sign-up, before the first
 // request: what an activation campaign ("signed up, did nothing") needs.
 message AuthUserCreated {
-  string user_id = 1;
-  string email   = 2;
+  string                    user_id    = 1;
+  string                    email      = 2;
+  google.protobuf.Timestamp created_at = 3;
 }
 
 // auth.UserUpdated — the contact follows a changed address.

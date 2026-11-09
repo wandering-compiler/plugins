@@ -2,7 +2,8 @@
 
 The gateway's request stream into a marketing tool. Every signed-in request
 of a surface that records marketing (`request_events: { marketing: true }`)
-becomes an event on the user's contact in the tool, and the contacts follow
+reaches the user's contact in the tool — as an event, as a date attribute, or
+both — and the contacts follow
 the auth plugin's accounts: created at sign-up, updated with the address,
 given the user's marketing consent, deleted with the account. The tool's own
 segments and automations do the rest: who uses what, where the gaps are,
@@ -16,9 +17,19 @@ erasure are auth's events), on a surface that records marketing:
 ```proto
 plugins: [
   { name: "auth" registered_as: "auth" features: { names: ["...", "user_admin", "marketing_consent"] } },
-  { name: "marketing" registered_as: "marketing" features: { names: ["brevo"] } }
+  { name: "marketing" registered_as: "marketing" features: { names: ["brevo", "brevo_events"] } }
 ]
 ```
+
+**Events, attributes or both.** `brevo` keeps the contacts; how each request
+reaches Brevo is a second feature, and at least one is required (`brevo` alone
+refuses to boot):
+
+| features | each request becomes | for |
+|---|---|---|
+| `brevo`, `brevo_events` | an event on the contact, with the request's context | history, segments on what a request carried (organization, account type, UTM) |
+| `brevo`, `brevo_attributes` | the date of its method on the contact (`W17_TASKSBUSINESS_CREATETASK`), and `W17_LAST_ACTIVITY_AT` | Brevo's automations and segments, which start from contact attributes ("signed up 7 days ago and never created a task") |
+| all three | both | |
 
 `user_admin` brings auth's `UserUpdated` and `UserDeleted` (contact updates
 and deletion), `marketing_consent` its `MarketingConsentChanged`. Without
@@ -43,7 +54,7 @@ letters, to be replayed once the account allows them.
 
 ## What reaches Brevo
 
-- **Events** (`POST /v3/events/batch`): the method as the event name
+- **Events** (`brevo_events`, `POST /v3/events/batch`): the method as the event name
   (`TasksBusiness_CreateTask`), on the contact keyed by the user's id
   (`ext_id`), at the request's time, with the record's own properties:
   `w17_status` (or `w17_grpc_code`), `w17_duration_ms`, `w17_api`,
@@ -54,11 +65,21 @@ letters, to be replayed once the account allows them.
   the record knows it). The organization is never written to the contact: a
   person may work in two organizations at once, and only the request knows
   which one it was.
+- **Attributes** (`brevo_attributes`, `PUT /v3/contacts/{id}`): one date
+  attribute per method, `W17_<SERVICE>_<METHOD>`, holding the day the user
+  last made that request, and `W17_LAST_ACTIVITY_AT`, the exact time of their
+  last one as text (ISO 8601: a Brevo date holds no time). Only the last time:
+  the request's organization, status and UTM tags are the event's. The plugin
+  keeps each date (`Activity`) and only ever moves it forward, so a late or
+  redelivered request never writes an older day; the dates go with the
+  account.
 - **Not**: the request's own fields (yet), the IP address, the user agent,
   anything marked `sensitive`.
 - **Contacts** (`POST /v3/contacts`, upsert by `ext_id`): created on
-  `UserCreated` with the email, updated on `UserUpdated`, the consent
-  attribute set on `MarketingConsentChanged`. Whether campaigns may reach the
+  `UserCreated` with the email and the day the account was created
+  (`W17_SIGNED_UP_AT`), updated on `UserUpdated`, the consent attribute and
+  the day it was decided (`W17_MARKETING_CONSENT_AT`) set on
+  `MarketingConsentChanged`. Whether campaigns may reach the
   contact (`emailBlacklisted`, Brevo's "Email campaigns: Subscribed"): a new
   account is blacklisted, a no blacklists, and only the user's newest yes
   subscribes — after reading the contact from Brevo, so a person who
@@ -76,9 +97,12 @@ subscribes anyone, and leaves contacts it did not create alone. A
 `Reconciliation` row records that it ran, so a restart or a second replica
 does not run it again.
 
-The plugin creates the contact attribute it writes (`W17_MARKETING_CONSENT`,
-or `BREVO_CONSENT_ATTRIBUTE`) when it starts: Brevo drops an attribute the
-account does not have, silently. Segment by organization or account type on
+The plugin creates the contact attributes it writes when it starts — the
+consent (`W17_MARKETING_CONSENT`, or `BREVO_CONSENT_ATTRIBUTE`), the two dates,
+and with `brevo_attributes` one per method `SEND` / `INCLUDE` / `EXCLUDE` let
+through: Brevo drops an attribute the account does not have, silently. A
+method let through later (a new `INCLUDE`) gets its attribute at the next
+boot. Segment by organization or account type on
 the events' properties.
 
 Consent does not change what is recorded or sent: it is the tool's to read
@@ -134,7 +158,9 @@ and `_BREVO_API_KEY=stub-key`.
 
 The stream delivers at least once and Brevo's events API has no idempotency
 key, so a record is remembered as sent (`SentEvent`, three days) once Brevo
-accepted it, and a redelivered one is skipped. A transient failure (network,
+accepted it, and a redelivered one is skipped. With both features the
+attributes are written first: written again they change nothing, so a failure
+there redelivers the batch before any event left. A transient failure (network,
 429, 5xx) is redelivered; an event Brevo refuses for its content is logged
 and not retried. A 429 is waited out as Brevo's `x-sib-ratelimit-reset`
 says. The behaviour is specified in [SPEC.md](SPEC.md).

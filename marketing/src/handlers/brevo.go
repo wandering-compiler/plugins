@@ -9,6 +9,8 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
+
 	"github.com/wandering-compiler/plugins/marketing/gen"
 	pb "github.com/wandering-compiler/plugins/marketing/gen/pb"
 	"github.com/wandering-compiler/plugins/marketing/lib/brevo"
@@ -27,9 +29,38 @@ type brevoTool struct {
 	client      brevoAPI
 	sel         selection
 	consentAttr string
-	query       pb.MarketingQueryClient
-	mutation    pb.MarketingMutationClient
+	// events: the records go to Brevo as events (brevo_events).
+	events bool
+	// attributes: the records move date attributes on the contact
+	// (brevo_attributes); only in a build that has its Go.
+	attributes bool
+	query      pb.MarketingQueryClient
+	mutation   pb.MarketingMutationClient
 }
+
+// The contact attributes the plugin dates. Brevo's date attributes hold a day
+// (YYYY-MM-DD) and no time.
+const (
+	signedUpAttr  = "W17_SIGNED_UP_AT"
+	consentAtAttr = "W17_MARKETING_CONSENT_AT"
+)
+
+// brevoDate is t as a Brevo date attribute's value.
+func brevoDate(t time.Time) string { return t.UTC().Format("2006-01-02") }
+
+// attributeDef is a contact attribute the plugin writes, and its Brevo type.
+type attributeDef struct{ name, typ string }
+
+// The brevo_attributes feature's parts, set by its init; nil in a build
+// without it, whose Activity table and rpcs do not exist.
+var (
+	// writeActivity moves the date attributes of a batch's records.
+	writeActivity func(t *brevoTool, ctx context.Context, records []*w17pb.RequestEventMeta) error
+	// eraseActivity forgets what an erased user did.
+	eraseActivity func(t *brevoTool, ctx context.Context, user string) error
+	// activityAttributes are the attributes writeActivity writes.
+	activityAttributes func(t *brevoTool) []attributeDef
+)
 
 // brevoAPI is what the tool calls; *brevo.Client in production.
 type brevoAPI interface {
@@ -69,7 +100,11 @@ func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.Cl
 	if attr == "" {
 		attr = "W17_MARKETING_CONSENT"
 	}
-	t := &brevoTool{client: client, sel: sel, consentAttr: attr, query: clients.MarketingQuery(), mutation: clients.MarketingMutation()}
+	attributes := gen.FeatureBrevoAttributes && writeActivity != nil
+	if err := deliveryChosen(gen.FeatureBrevoEvents, attributes); err != nil {
+		return err
+	}
+	t := &brevoTool{client: client, sel: sel, consentAttr: attr, events: gen.FeatureBrevoEvents, attributes: attributes, query: clients.MarketingQuery(), mutation: clients.MarketingMutation()}
 	if err := registry.RegisterMarketingConsumer("brevo", t); err != nil {
 		return err
 	}
@@ -95,19 +130,49 @@ func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.Cl
 	return nil
 }
 
-// ensureAttributes creates the contact attribute the plugin writes, in the
-// background and again every interval until Brevo has it: without it Brevo
-// drops the consent silently, and the bundle's boot must not wait on Brevo
-// being reachable.
+// deliveryChosen refuses a brevo activation that names neither way for the
+// records to reach Brevo: it would boot, keep the contacts, and send nothing
+// anyone asked for — which is what an activation from before brevo_events
+// existed would silently become.
+func deliveryChosen(events, attributes bool) error {
+	if events || attributes {
+		return nil
+	}
+	return fmt.Errorf("marketing plugin: brevo is on, and neither brevo_events nor brevo_attributes: no request would reach Brevo\n" +
+		"  fix: add brevo_events (each request as an event; what brevo alone did before), brevo_attributes (each request as a date attribute on the contact, for Brevo's automations), or both to the activation's features")
+}
+
+// contactAttributes are the contact attributes the plugin writes.
+func (t *brevoTool) contactAttributes() []attributeDef {
+	out := []attributeDef{{t.consentAttr, "boolean"}, {consentAtAttr, "date"}, {signedUpAttr, "date"}}
+	if t.attributes {
+		out = append(out, activityAttributes(t)...)
+	}
+	return out
+}
+
+// ensureAttributes creates the contact attributes the plugin writes, in the
+// background and again every interval until Brevo has them all: without one
+// Brevo drops it from every write silently, and the bundle's boot must not
+// wait on Brevo being reachable. One created is not asked for again.
 func (t *brevoTool) ensureAttributes(every time.Duration) (stop func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
+		todo := t.contactAttributes()
 		for {
-			err := t.client.EnsureAttribute(ctx, t.consentAttr, "boolean")
-			if err == nil || ctx.Err() != nil {
+			var left []attributeDef
+			for _, a := range todo {
+				if err := t.client.EnsureAttribute(ctx, a.name, a.typ); err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					log.Printf("marketing plugin: creating the Brevo contact attribute %s: %v", a.name, err)
+					left = append(left, a)
+				}
+			}
+			if todo = left; len(todo) == 0 {
 				return
 			}
-			log.Printf("marketing plugin: creating the Brevo contact attribute %s: %v", t.consentAttr, err)
 			select {
 			case <-ctx.Done():
 				return

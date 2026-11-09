@@ -20,7 +20,7 @@ func call(t *testing.T, h http.Handler, method, path, key, body string) *httptes
 }
 
 func TestStub_KeepsWhatThePluginSent(t *testing.T) {
-	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]bool{}}
+	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]string{}}
 	if w := call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u1","email":"a@x.example","updateEnabled":true}`); w.Code != http.StatusCreated {
 		t.Fatalf("create = %d", w.Code)
 	}
@@ -65,7 +65,7 @@ func TestStub_KeepsWhatThePluginSent(t *testing.T) {
 }
 
 func TestStub_RefusesAWrongKey(t *testing.T) {
-	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]bool{}}
+	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]string{}}
 	if w := call(t, s, http.MethodPost, "/v3/events/batch", "other", `{"events":[]}`); w.Code != http.StatusUnauthorized {
 		t.Errorf("wrong key = %d, want 401", w.Code)
 	}
@@ -75,7 +75,7 @@ func TestStub_RefusesAWrongKey(t *testing.T) {
 // created by POST without it is subscribed, one an event creates is
 // blacklisted, and a write that names it sets it.
 func TestStub_KeepsEmailBlacklisted(t *testing.T) {
-	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]bool{}}
+	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]string{}}
 	get := func(ext string) contact {
 		t.Helper()
 		var c contact
@@ -128,7 +128,7 @@ func TestStub_KeepsEmailBlacklisted(t *testing.T) {
 // The plugin reads a contact before it subscribes it; a suite unsubscribes a
 // person the way they would in Brevo.
 func TestStub_AnswersOneContactAndAnUnsubscribe(t *testing.T) {
-	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]bool{}}
+	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]string{}}
 	call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u1","email":"a@x.example","updateEnabled":true,"emailBlacklisted":false}`)
 	read := func() map[string]any {
 		t.Helper()
@@ -156,12 +156,32 @@ func TestStub_AnswersOneContactAndAnUnsubscribe(t *testing.T) {
 // A create that must not update (updateEnabled false) is refused for a
 // contact that exists, which keeps its emailBlacklisted.
 func TestStub_ACreateOnlyLeavesAnExistingContact(t *testing.T) {
-	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]bool{}}
+	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]string{}}
 	call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u1","updateEnabled":true,"emailBlacklisted":false}`)
 	if w := call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u1","email":"a@x.example","updateEnabled":false,"emailBlacklisted":true}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "duplicate_parameter") {
 		t.Fatalf("create-only of an existing contact = %d %s", w.Code, w.Body.String())
 	}
 	if s.contacts["u1"].EmailBlacklisted {
 		t.Error("a refused create changed the contact")
+	}
+}
+
+// brevo/dated-contact: the stub keeps an attribute's type and refuses a date
+// that is not YYYY-MM-DD, so a suite sees a malformed date the plugin would
+// send.
+func TestStub_RefusesAMalformedDate(t *testing.T) {
+	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]string{}}
+	call(t, s, http.MethodPost, "/v3/contacts/attributes/normal/W17_SIGNED_UP_AT", "k", `{"type":"date"}`)
+	if w := call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u1","attributes":{"W17_SIGNED_UP_AT":"2026-11-09T10:00:00Z"}}`); w.Code != http.StatusBadRequest {
+		t.Errorf("a datetime in a date attribute: %d, want 400", w.Code)
+	}
+	if w := call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u1","attributes":{"W17_SIGNED_UP_AT":"2026-11-09"}}`); w.Code != http.StatusCreated {
+		t.Errorf("a date: %d, want 201", w.Code)
+	}
+	if w := call(t, s, http.MethodPut, "/v3/contacts/u1?identifierType=ext_id", "k", `{"attributes":{"W17_SIGNED_UP_AT":"9.11.2026"}}`); w.Code != http.StatusBadRequest {
+		t.Errorf("a malformed date by PUT: %d, want 400", w.Code)
+	}
+	if got := s.contacts["u1"].Attributes["W17_SIGNED_UP_AT"]; got != "2026-11-09" {
+		t.Errorf("kept %v, want the valid date", got)
 	}
 }
