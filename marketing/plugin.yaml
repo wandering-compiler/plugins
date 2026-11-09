@@ -39,7 +39,7 @@ env:
   - name: send
     type: string
     default: "mutations"
-    description: "Which recorded requests become events: mutations (default), queries, all, or off. A method reads when it is served as GET or belongs to a Query service; everything else is a mutation."
+    description: "Which recorded requests reach Brevo (as events, attributes or both): mutations (default), queries, all, or off. A method reads when it is served as GET or belongs to a Query service; everything else is a mutation."
   - name: include
     type: string
     description: "Comma-separated methods sent whatever `send` says (`/<package>.<Service>/<Method>`, as a record names them). A name the stream does not record is refused at boot."
@@ -50,12 +50,22 @@ env:
 features:
   - name: brevo
     default: false
-    description: "The Brevo integration: the gateway's marketing records become Brevo events on the user's contact (POST /v3/events/batch), contacts are created and updated from auth's UserCreated / UserUpdated (POST /v3/contacts) with the consent attribute from MarketingConsentChanged, and deleted on UserDeleted (DELETE /v3/contacts/{id}?identifierType=ext_id). Campaigns reach a contact (emailBlacklisted false) only once the user's newest consent is a yes, and never again after the person unsubscribed in Brevo (read from Brevo before subscribing) until a later consent; every other write blacklists or leaves the field alone. Adds the SentEvent table, which keeps a redelivered record from becoming a second event, the Contact table, which keeps each user's last known consent, address and what the plugin last wrote, and the Reconciliation table, which runs the one-time pass that blacklists the contacts created before the plugin wrote emailBlacklisted."
+    description: "The Brevo integration: contacts are created and updated from auth's UserCreated / UserUpdated (POST /v3/contacts) with the date the account was created (W17_SIGNED_UP_AT), the consent attribute and the date it was decided (W17_MARKETING_CONSENT_AT) from MarketingConsentChanged, and deleted on UserDeleted (DELETE /v3/contacts/{id}?identifierType=ext_id). Campaigns reach a contact (emailBlacklisted false) only once the user's newest consent is a yes, and never again after the person unsubscribed in Brevo (read from Brevo before subscribing) until a later consent; every other write blacklists or leaves the field alone. How the gateway's marketing records reach Brevo is brevo_events, brevo_attributes or both; an activation naming neither sends events, as brevo always did. Adds the SentEvent table, which keeps a redelivered record from becoming a second event, the Contact table, which keeps each user's last known consent, address and what the plugin last wrote, and the Reconciliation table, which runs the one-time pass that blacklists the contacts created before the plugin wrote emailBlacklisted."
     go_files:
       - handlers/brevo.go
       - handlers/brevo_events.go
       - handlers/brevo_contacts.go
       - handlers/brevo_reconcile.go
+  - name: brevo_events
+    default: false
+    requires: [brevo]
+    description: "Each marketing record becomes a Brevo event on the user's contact (POST /v3/events/batch): the method as the event name (<Service>_<Method>), dated by the request, with its status, duration, surface, route, organization, account type, UTM tags and referrer as properties. Events keep the history and carry the request's context. An activation naming neither brevo_events nor brevo_attributes sends events too (what brevo did before the choice existed); name brevo_events beside brevo_attributes for both."
+  - name: brevo_attributes
+    default: false
+    requires: [brevo]
+    description: "Each marketing record moves a date attribute on the user's contact (PUT /v3/contacts/{id}?identifierType=ext_id): W17_<SERVICE>_<METHOD> = the day the user last made that request, and W17_LAST_ACTIVITY_AT = the exact time of their last one (text, ISO 8601: Brevo's date attributes hold no time). Brevo's automations and segments start from contact attributes, so this is the shape to choose when campaigns should react to what people do; an attribute holds only the last time, never the request's context. Without brevo_events beside it, no events are sent. The attributes are created in the account when the bundle boots, for every method send / include / exclude let through: Brevo drops an attribute it does not know, silently. Adds the Activity table, which keeps each user's last date per attribute so a redelivered or concurrent record never moves one back; deleted with the account."
+    go_files:
+      - handlers/brevo_attributes.go
   - name: brevo_webhook
     default: false
     requires: [brevo]
@@ -63,12 +73,12 @@ features:
     go_files:
       - handlers/brevo_webhook.go
 
-# The gateway's marketing records, in Brevo as events.
+# The gateway's marketing records, in Brevo as events and/or contact attributes.
 request_consumers:
   - name: brevo
     purpose: marketing
     feature: brevo
-    description: "Every marketing record of a signed-in user (per send / include / exclude) to Brevo, as an event on the contact keyed by the user's id (ext_id): the method as the event name, its status, duration, surface, route, UTM tags and referrer as properties. The request's own fields are not sent."
+    description: "Every marketing record of a signed-in user (per send / include / exclude) to Brevo, on the contact keyed by the user's id (ext_id): as an event with brevo_events (the method as the event name, its status, duration, surface, route, UTM tags and referrer as properties), as the method's date attribute with brevo_attributes, or both. The request's own fields are not sent."
 
 # auth's events, for the contacts. UserUpdated and UserDeleted are auth's
 # user_admin events, MarketingConsentChanged its marketing_consent one: an

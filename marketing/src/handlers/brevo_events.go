@@ -16,27 +16,49 @@ import (
 	"github.com/wandering-compiler/plugins/marketing/lib/brevo"
 )
 
-// ConsumeMarketing sends a batch of the gateway's marketing records to Brevo
-// as events.
+// ConsumeMarketing sends a batch of the gateway's marketing records to Brevo:
+// as date attributes on the contact (brevo_attributes), as events
+// (brevo_events), or both.
 //
-// The stream delivers a batch at least once, and Brevo has no idempotency key,
+// Events: the stream delivers a batch at least once, and Brevo has no idempotency key,
 // so a record already sent is skipped (SentEvent), and a record is recorded
 // as sent only once Brevo accepted it. A transient failure returns an error
 // and the stream redelivers the batch; what was sent before it is skipped
 // then. An event Brevo refuses for its content is logged and not retried:
 // sending it again would be refused again.
 func (t *brevoTool) ConsumeMarketing(ctx context.Context, batch *eventlog.ConsumedBatch) error {
+	var selected []*w17pb.RequestEventMeta
+	for _, rec := range batch.Records {
+		if meta := rec.Meta; meta != nil && meta.GetUserId() != "" && t.sel.sends(meta.GetMethod()) {
+			selected = append(selected, meta)
+		}
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+	// The attributes first: writing them again is harmless (an attribute
+	// only moves forward), so a failure here redelivers the batch with no
+	// event sent yet, and an event failure after it redoes them for nothing.
+	if t.attributes {
+		if err := writeActivity(t, ctx, selected); err != nil {
+			return err
+		}
+	}
+	if !t.events {
+		return nil
+	}
+	return t.sendEvents(ctx, selected)
+}
+
+// sendEvents sends the selected records as Brevo events (brevo_events).
+func (t *brevoTool) sendEvents(ctx context.Context, selected []*w17pb.RequestEventMeta) error {
 	type pending struct {
 		id    string
 		event brevo.Event
 	}
 	var todo []pending
 	var ids []string
-	for _, rec := range batch.Records {
-		meta := rec.Meta
-		if meta == nil || !t.sel.sends(meta.GetMethod()) {
-			continue
-		}
+	for _, meta := range selected {
 		ev, ok := eventFor(meta, t.consentAttr)
 		if !ok {
 			continue

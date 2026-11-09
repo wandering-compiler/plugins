@@ -1,9 +1,9 @@
 # marketing — behaviour specification
 
 What the `marketing` plugin does and what it must never do. It covers plugin
-version 0.1.0-rc.1. Ids are `<feature>/<name>`; a property without a proof is a
+version 0.1.0-rc.6. Ids are `<feature>/<name>`; a property without a proof is a
 gap, not a promise. The handler tests run against a fake Brevo and in-memory
-`SentEvent`, `Contact` and `Reconciliation` tables; the client tests
+`SentEvent`, `Contact`, `Reconciliation` and `Activity` tables; the client tests
 (`lib/brevo`) against an HTTP stub of the Brevo API.
 
 ## Features
@@ -11,14 +11,17 @@ gap, not a promise. The handler tests run against a fake Brevo and in-memory
 | feature | default | requires | conflicts with |
 |---|---|---|---|
 | `brevo` | off | — (plugin requires `auth`) | — |
+| `brevo_events` | off | `brevo` | — |
+| `brevo_attributes` | off | `brevo` | — |
 | `brevo_webhook` | off | `brevo` | — |
 
 ## Per feature
 
 ### brevo
 
-- **Purpose.** The gateway's marketing records as Brevo events on the user's
-  contact; the contacts following auth's accounts, consent and erasure.
+- **Purpose.** The contacts following auth's accounts, consent and erasure;
+  the gateway's marketing records reaching them through `brevo_events`,
+  `brevo_attributes` or both.
 - **Adds.** Tables `SentEvent`, `Contact` (each user's last known consent,
   address and Brevo-side unsubscribe) and `Reconciliation` (one-time passes);
   `MarketingQuery.ListSentEvents`, `ListContacts`, `ListContactsByEmail`,
@@ -45,9 +48,35 @@ gap, not a promise. The handler tests run against a fake Brevo and in-memory
 | `brevo/stub-keeps-blacklisted` | The `brevostub` sandbox MUST keep and answer `emailBlacklisted` as Brevo does: subscribed on a create that does not name it, blacklisted for a contact an event creates, set by a write that names it, read by `GET /v3/contacts/{id}`, listed by `GET /v3/contacts`; `POST /_stub/contacts/{ext_id}/unsubscribe` unsubscribes the person as Brevo would. | Failure & configuration | `TestStub_KeepsEmailBlacklisted`, `TestStub_AnswersOneContactAndAnUnsubscribe` |
 | `brevo/rate` | Requests MUST leave at most `brevo_rps` per second; a 429 MUST be waited out as `x-sib-ratelimit-reset` says. | Performance | `TestPace_SpacesTheRequests`, `TestDo_WaitsOutARateLimit` |
 | `brevo/contact-write` | A contact MUST be written by its `ext_id` (PUT), and created only when Brevo has none; an address change MUST reach Brevo. | Consistency & concurrency | `TestContacts_FollowTheAccounts`, `TestContacts_ConsentBeforeTheContactCreatesIt`, `TestUpdateContact_ByTheUsersID` |
-| `brevo/attributes` | The consent attribute MUST exist in the account before it is written, created without holding up the bundle's boot. | Failure & configuration | `TestEnsureAttributes`, `TestEnsureAttribute_AnExistingOneIsFine` |
+| `brevo/attributes` | Every attribute the plugin writes MUST be created in the account — the consent, the two dates, and with `brevo_attributes` one per method the selection sends and the last activity's time — without holding up the bundle's boot, each retried until Brevo has it and not asked for again once it does. | Failure & configuration | `TestEnsureAttributes`, `TestEnsureAttributes_RetriesOnlyWhatFailed`, `TestEnsureAttribute_AnExistingOneIsFine` |
+| `brevo/dated-contact` | A contact MUST carry the day its account was created (`W17_SIGNED_UP_AT`, from `UserCreated.created_at`) and, with every write of the consent attribute, the day that consent was decided (`W17_MARKETING_CONSENT_AT`); dates MUST be Brevo dates (`YYYY-MM-DD`). | Consistency & concurrency | `TestContacts_CarryTheSignUpDate`, `TestConsent_SetsEmailBlacklistedWithTheAttribute`, `TestContacts_FollowTheAccounts`, `TestStub_RefusesAMalformedDate` |
+| `brevo/events-by-default` | Records MUST be sent as events with `brevo_events`, and with neither `brevo_events` nor `brevo_attributes` (what `brevo` did before the choice existed); with `brevo_attributes` alone no event MUST be sent. | Failure & configuration | `TestSendsEvents`, `TestActivity_AttributesOnlyMoveTheDatesAndSendNoEvent` |
 | `brevo/request-context-on-the-event` | The organization a request acted in and the caller's account type there MUST go on that request's event (`w17_org_id`, `w17_account_type`), each only when the record carries it, and MUST NOT be written to the contact, which is the person and not the request. | Consistency & concurrency | `TestEventFor` |
 | `brevo/batch-limits` | A batch MUST hold at most 200 events and 512 KB. | Failure & configuration | `TestConsumeMarketing_SplitsAtTheBatchLimit`, `TestSendEvents_RefusesWhatBrevoWould` |
+
+### brevo_events
+
+- **Purpose.** Each marketing record as a Brevo event on the user's contact:
+  what `brevo` alone did before 0.1.0-rc.6.
+- **Adds.** Nothing of its own: the request consumer sends events when it is
+  on; `SentEvent` and its rpcs are `brevo`'s. The `brevo/sent-once`,
+  `brevo/no-personal-extras`, `brevo/request-context-on-the-event` and
+  `brevo/batch-limits` invariants are its behaviour.
+
+### brevo_attributes
+
+- **Purpose.** Each marketing record moving a date attribute on the user's
+  contact, the shape Brevo's automations and segments start from.
+- **Adds.** Table `Activity` (each user's last date per attribute);
+  `MarketingQuery.ListActivity`; `MarketingMutation.RecordActivity`,
+  `BumpActivity`, `EraseActivity`.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| `brevo_attributes/date-per-method` | A record the selection sends MUST move `W17_<SERVICE>_<METHOD>` to the day the user made it and `W17_LAST_ACTIVITY_AT` to the exact time of their latest recorded request (ISO 8601 text); without `brevo_events` no event MUST be sent. A contact Brevo lacks MUST be created blacklisted. | Consistency & concurrency | `TestActivity_AttributesOnlyMoveTheDatesAndSendNoEvent`, `TestActivity_BothWriteTheAttributesAndSendTheEvents`, `TestActivity_FollowsTheSelection`, `TestActivityAttr` |
+| `brevo_attributes/never-back` | A date MUST only move forward: the row is moved by a write conditional on being later, and Brevo is written from the rows as stored; a row moved while the contact is written MUST be written again, so the last write is the newest. | Consistency & concurrency | `TestActivity_AnOlderRecordDoesNotMoveADateBack`, `TestActivity_ARowMovedDuringTheWriteIsWrittenAgain` |
+| `brevo_attributes/transient-is-redelivered` | A failure of the table or of Brevo MUST fail the batch before any event of it is sent; the attributes are written first because writing them again changes nothing. | Failure & configuration | `TestActivity_AFailureSendsNoEventAndIsRedelivered`, `TestActivity_ATableFailureWritesNothing` |
+| `brevo_attributes/erasure` | `UserDeleted` MUST delete the user's `Activity` rows, and a late record of an erased user MUST write nothing. | Security | `TestActivity_AnErasedUserIsNotWrittenAndForgotten` |
 
 ### brevo_webhook
 
@@ -84,6 +113,15 @@ gap, not a promise. The handler tests run against a fake Brevo and in-memory
 5. **A yes and a no landing within one Brevo round trip** can leave Brevo
    subscribed for that round trip: the yes re-reads its row after writing and
    blacklists again when a no overtook it.
+6. **`brevo_attributes` is not measured against an account yet.** The date
+   format (`YYYY-MM-DD`), the `text` type of `W17_LAST_ACTIVITY_AT` and the
+   attribute names (`W17_<SERVICE>_<METHOD>`, up to 255 characters) follow
+   Brevo's reference; the stub refuses a malformed date, which is what Brevo
+   is expected to do and not measured. Brevo's limits on an attribute name's length and on how many
+   attributes an account may hold are not documented there: a name it refuses
+   is logged at boot and retried, and that method's dates are dropped by Brevo
+   until it exists.
+
 
 ## Measured against a Brevo account
 

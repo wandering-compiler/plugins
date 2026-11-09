@@ -58,6 +58,22 @@ message GetReconciliationResp {
   google.protobuf.Timestamp finished_at = 3 [(w17.field) = { type: DATETIME, null: true }];
 }
 
+// ActivityRow is one Activity, as ListActivity answers it.
+message ActivityRow {
+  option (w17.contrib.plugin_feature) = "brevo_attributes";
+  string                    user_id   = 1;
+  string                    attribute = 2;
+  google.protobuf.Timestamp last_at   = 3 [(w17.field) = { type: DATETIME }];
+}
+message ListActivityReq {
+  option (w17.contrib.plugin_feature) = "brevo_attributes";
+  repeated string user_ids = 1;
+}
+message ListActivityResp {
+  option (w17.contrib.plugin_feature) = "brevo_attributes";
+  repeated ActivityRow rows = 1;
+}
+
 service MarketingQuery {
   // Every rpc here is brevo's, and so is every table it reads or writes
   // (types/models.proto): without the feature the whole file drops. Left
@@ -119,6 +135,20 @@ service MarketingQuery {
         dql:
           "SELECT r.name AS name, r.claimed_at AS claimed_at, r.finished_at AS finished_at "
           "FROM @module.Reconciliation r WHERE r.name = :name"
+      }
+    };
+  }
+
+  // ListActivity — every attribute's last date of these users. Gated
+  // brevo_attributes.
+  rpc ListActivity(ListActivityReq) returns (ListActivityResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo_attributes";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT a.user_id AS user_id, a.attribute AS attribute, a.last_at AS last_at "
+          "FROM @module.Activity a WHERE a.user_id IN (:user_ids)"
       }
     };
   }

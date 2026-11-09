@@ -10,7 +10,8 @@
 //	GET    /v3/contacts/{id}?identifierType=ext_id  → the contact (emailBlacklisted), 404 when unknown
 //	POST   /_stub/contacts/{ext_id}/unsubscribe     → 204: the person unsubscribes in Brevo (blacklisted)
 //	DELETE /v3/contacts/{id}?identifierType=ext_id  → 204, 404 when unknown
-//	POST   /v3/contacts/attributes/normal/{name}    → 201, 400 when it exists
+//	POST   /v3/contacts/attributes/normal/{name}    → 201 with its type, 400 when it exists
+//	                                                  (a date attribute then refuses a value that is not YYYY-MM-DD, 400)
 //	GET    /_stub/contacts/{ext_id}                 → the contact and its events, 404 when none
 //	GET    /_stub/events                            → every event received, in order
 //
@@ -59,7 +60,24 @@ type stub struct {
 	nextID     int
 	contacts   map[string]*contact
 	events     []event
-	attributes map[string]bool
+	attributes map[string]string // name → type
+}
+
+// valid refuses a value of an attribute the account declares as a date that
+// is not YYYY-MM-DD, so a suite sees a malformed date the plugin would send
+// (Brevo is expected to refuse one; not measured). What the account does not
+// know is dropped later, not refused.
+func (s *stub) valid(attrs map[string]any) string {
+	for k, v := range attrs {
+		if s.attributes[k] != "date" {
+			continue
+		}
+		str, _ := v.(string)
+		if _, err := time.Parse("2006-01-02", str); err != nil {
+			return "attribute " + k + " is a date: YYYY-MM-DD, got " + strconv.Quote(str)
+		}
+	}
+	return ""
 }
 
 // set copies the attributes the account knows; the others are dropped, as
@@ -72,7 +90,7 @@ func (s *stub) set(c *contact, attrs map[string]any) {
 			}
 			continue
 		}
-		if s.attributes[k] {
+		if s.attributes[k] != "" {
 			c.Attributes[k] = v
 		}
 	}
@@ -169,6 +187,10 @@ func (s *stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			refuse(w, http.StatusBadRequest, "missing_parameter", "ext_id is required")
 			return
 		}
+		if msg := s.valid(body.Attributes); msg != "" {
+			refuse(w, http.StatusBadRequest, "invalid_parameter", msg)
+			return
+		}
 		prev, existed := s.contacts[body.ExtID]
 		if existed && body.UpdateEnabled != nil && !*body.UpdateEnabled {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"code": "duplicate_parameter", "message": "Contact already exist"})
@@ -194,11 +216,18 @@ func (s *stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, map[string]int{"id": c.ID})
 	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v3/contacts/attributes/normal/"):
 		name := strings.TrimPrefix(r.URL.Path, "/v3/contacts/attributes/normal/")
-		if s.attributes[name] {
+		if s.attributes[name] != "" {
 			refuse(w, http.StatusBadRequest, "invalid_parameter", "Attribute name must be unique")
 			return
 		}
-		s.attributes[name] = true
+		var body struct {
+			Type string `json:"type"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Type == "" {
+			refuse(w, http.StatusBadRequest, "missing_parameter", "type is required")
+			return
+		}
+		s.attributes[name] = body.Type
 		writeJSON(w, http.StatusCreated, map[string]any{})
 	case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v3/contacts/"):
 		ext := strings.TrimPrefix(r.URL.Path, "/v3/contacts/")
@@ -213,6 +242,10 @@ func (s *stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			refuse(w, http.StatusBadRequest, "invalid_parameter", "body")
+			return
+		}
+		if msg := s.valid(body.Attributes); msg != "" {
+			refuse(w, http.StatusBadRequest, "invalid_parameter", msg)
 			return
 		}
 		if body.EmailBlacklisted != nil {
@@ -303,7 +336,7 @@ func main() {
 	}
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           &stub{key: key, contacts: map[string]*contact{}, attributes: map[string]bool{}},
+		Handler:           &stub{key: key, contacts: map[string]*contact{}, attributes: map[string]string{}},
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

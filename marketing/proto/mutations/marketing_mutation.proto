@@ -89,6 +89,26 @@ message ReconciliationResp {
   string name = 1;
 }
 
+message ActivityReq {
+  option (w17.contrib.plugin_feature) = "brevo_attributes";
+  string                    user_id   = 1 [(w17.field) = { type: UUID }];
+  string                    attribute = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
+  google.protobuf.Timestamp last_at   = 3 [(w17.field) = { type: DATETIME }];
+}
+message ActivityWriteResp {
+  option (w17.contrib.plugin_feature) = "brevo_attributes";
+}
+// ActivityMovedResp — a BumpActivity that moved the row; NotFound when the
+// row holds the same date or a later one.
+message ActivityMovedResp {
+  option (w17.contrib.plugin_feature) = "brevo_attributes";
+  string user_id = 1;
+}
+message EraseActivityReq {
+  option (w17.contrib.plugin_feature) = "brevo_attributes";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+
 service MarketingMutation {
   // Every rpc here is brevo's, and so is every table it reads or writes
   // (types/models.proto): without the feature the whole file drops. Left
@@ -272,6 +292,48 @@ service MarketingMutation {
           "UPDATE @module.Reconciliation SET finished_at = NOW() "
           "WHERE name = :name AND claimed_by = :owner AND finished_at IS NULL "
           "RETURNING name"
+      }
+    };
+  }
+
+  // RecordActivity — the user's row for one attribute, created with this
+  // date when there is none; an existing row is left for BumpActivity, so
+  // two deliveries at once cannot both create it. Gated brevo_attributes.
+  rpc RecordActivity(ActivityReq) returns (ActivityWriteResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo_attributes";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPSERT INTO @module.Activity SET user_id = :user_id, attribute = :attribute, last_at = :last_at "
+          "ON CONFLICT (user_id, attribute) DO NOTHING"
+      }
+    };
+  }
+
+  // BumpActivity — move the row to a later date, never back. NotFound = the
+  // row holds this date or a later one. Gated brevo_attributes.
+  rpc BumpActivity(ActivityReq) returns (ActivityMovedResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo_attributes";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Activity SET last_at = :last_at "
+          "WHERE user_id = :user_id AND attribute = :attribute AND last_at < :last_at "
+          "RETURNING user_id"
+      }
+    };
+  }
+
+  // EraseActivity — the account was erased: what the user did goes with
+  // it. Gated brevo_attributes.
+  rpc EraseActivity(EraseActivityReq) returns (ActivityWriteResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo_attributes";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "DELETE FROM @module.Activity WHERE user_id = :user_id"
       }
     };
   }

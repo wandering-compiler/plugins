@@ -95,20 +95,51 @@ func normEmail(email string) string { return strings.ToLower(strings.TrimSpace(e
 // holding it back (zero rows), which is no failure.
 func heldBack(err error) bool { return status.Code(err) == codes.NotFound }
 
+// onUserCreated creates the contact, dated by when the account was created
+// (W17_SIGNED_UP_AT): an activation campaign counts from it.
 func (t *brevoTool) onUserCreated(ctx context.Context, ev *pb.AuthUserCreated) error {
-	return t.followAddress(ctx, "create the contact of", ev.GetUserId(), ev.GetEmail())
+	var attrs map[string]any
+	if at := ev.GetCreatedAt(); at != nil {
+		attrs = map[string]any{signedUpAttr: brevoDate(at.AsTime())}
+	}
+	return t.followAddress(ctx, "create the contact of", ev.GetUserId(), ev.GetEmail(), attrs)
 }
 
 func (t *brevoTool) onUserUpdated(ctx context.Context, ev *pb.AuthUserUpdated) error {
-	return t.followAddress(ctx, "update the contact of", ev.GetUserId(), ev.GetEmail())
+	return t.followAddress(ctx, "update the contact of", ev.GetUserId(), ev.GetEmail(), nil)
 }
 
-// followAddress writes the user's address to the contact. It never
+// consentAttrs are the consent attributes of a kept decision: its value and
+// the day it was decided. Called only with a known consent.
+func (t *brevoTool) consentAttrs(st contactState) map[string]any {
+	attrs := map[string]any{t.consentAttr: st.consent}
+	if st.consentAt != nil {
+		attrs[consentAtAttr] = brevoDate(*st.consentAt)
+	}
+	return attrs
+}
+
+// merged is a and b in one map, b winning; nil when both are empty.
+func merged(a, b map[string]any) map[string]any {
+	if len(a)+len(b) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(a)+len(b))
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		out[k] = v
+	}
+	return out
+}
+
+// followAddress writes the user's address and attrs to the contact. It never
 // subscribes: a contact without a consent is written blacklisted (a new
 // account's consent is unknown, so it is created blacklisted), and one with a
 // consent keeps whatever Brevo holds — the field is left out, so an
 // unsubscribe made in Brevo stands.
-func (t *brevoTool) followAddress(ctx context.Context, what, user, email string) error {
+func (t *brevoTool) followAddress(ctx context.Context, what, user, email string, attrs map[string]any) error {
 	if user == "" {
 		log.Printf("marketing plugin: an auth event to %s nobody (no user id): skipped", what)
 		return nil
@@ -133,9 +164,9 @@ func (t *brevoTool) followAddress(ctx context.Context, what, user, email string)
 		return nil
 	}
 	if !st.blacklisted() {
-		return t.contactCall(what, user, t.writeLeavingBlacklisted(ctx, user, email, nil))
+		return t.contactCall(what, user, t.writeLeavingBlacklisted(ctx, user, email, attrs))
 	}
-	if err := t.writeBlacklisted(ctx, user, email, nil); err != nil {
+	if err := t.writeBlacklisted(ctx, user, email, attrs); err != nil {
 		return t.contactCall(what, user, err)
 	}
 	// A yes may have landed while this wrote: blacklisting over it would
@@ -149,8 +180,7 @@ func (t *brevoTool) followAddress(ctx context.Context, what, user, email string)
 	if now.erasedAt != nil || now.blacklisted() {
 		return nil
 	}
-	attrs := map[string]any{t.consentAttr: now.consent}
-	return t.contactCall(what, user, t.subscribe(ctx, user, attrs, now, *now.consentAt, true))
+	return t.contactCall(what, user, t.subscribe(ctx, user, merged(attrs, t.consentAttrs(now)), now, *now.consentAt, true))
 }
 
 // writeBlacklisted writes the contact blacklisted (created when Brevo has
@@ -230,7 +260,7 @@ func (t *brevoTool) setContact(ctx context.Context, user, email string, attrs ma
 // onUserDeleted deletes the contact and its history in Brevo: the account
 // was erased, and the copy of the person's data in the tool goes with it.
 // The plugin's own row loses the address and keeps the record that it was
-// erased.
+// erased; with brevo_attributes, the dates of what the user did go too.
 func (t *brevoTool) onUserDeleted(ctx context.Context, ev *pb.AuthUserDeleted) error {
 	user := ev.GetUserId()
 	if user == "" {
@@ -238,6 +268,11 @@ func (t *brevoTool) onUserDeleted(ctx context.Context, ev *pb.AuthUserDeleted) e
 	}
 	if _, err := t.mutation.EraseContact(ctx, &pb.EraseContactReq{UserId: user}); err != nil {
 		return fmt.Errorf("marketing plugin: erasing the contact of user %s: %w", user, err)
+	}
+	if t.attributes {
+		if err := eraseActivity(t, ctx, user); err != nil {
+			return err
+		}
 	}
 	return t.contactCall("delete the contact of", user, t.client.DeleteContact(ctx, user))
 }
@@ -273,7 +308,7 @@ func (t *brevoTool) onConsentChanged(ctx context.Context, ev *pb.AuthMarketingCo
 	if st.consentAt == nil {
 		return fmt.Errorf("marketing plugin: the consent of user %s was not kept", user)
 	}
-	attrs := map[string]any{t.consentAttr: st.consent}
+	attrs := t.consentAttrs(st)
 	newest := st.consentAt.Equal(at) && st.consent == ev.GetConsent()
 	switch {
 	case st.blacklisted():
@@ -336,7 +371,7 @@ func (t *brevoTool) subscribe(ctx context.Context, user string, attrs map[string
 		return err
 	}
 	if now.erasedAt == nil && now.blacklisted() {
-		return t.writeBlacklisted(ctx, user, "", map[string]any{t.consentAttr: now.consent})
+		return t.writeBlacklisted(ctx, user, "", t.consentAttrs(now))
 	}
 	return nil
 }
