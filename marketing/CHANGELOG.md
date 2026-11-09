@@ -1,5 +1,25 @@
 # marketing — changelog
 
+## 0.1.0-rc.6
+
+### Requests reach Brevo as events, as contact attributes, or both
+
+How the gateway's marketing records reach Brevo is now the activation's choice, in its features: `brevo_events` (each request an event on the contact, what `brevo` alone does), `brevo_attributes` (each request moves a date attribute on the contact, the shape Brevo's automations and segments start from), or both. Both require `brevo`, which keeps the contacts, consent and erasure; naming neither sends events.
+
+- **`brevo_attributes`**: `W17_<SERVICE>_<METHOD>` holds the day the user last made that request (`W17_TASKSBUSINESS_CREATETASK = 2026-11-09`) and `W17_LAST_ACTIVITY_AT` the exact time of their last one (text, ISO 8601: Brevo's date attributes hold no time). The attributes are created in the account at boot for every method `send` / `include` / `exclude` let through. A new `Activity` table keeps each user's last date per attribute, so a redelivered or concurrent record never moves one back; it is deleted with the account. An attribute holds only the last time: the request's organization, status and UTM tags stay the event's.
+- **Dated contacts**, with either: `W17_SIGNED_UP_AT` (the day the account was created, from `UserCreated.created_at`) and `W17_MARKETING_CONSENT_AT` (the day the consent kept was decided, written with the consent attribute).
+- **The `brevostub` sandbox** keeps each attribute's type and refuses a date that is not `YYYY-MM-DD`, so a suite sees a malformed date the plugin would send.
+
+**Upgrading:** nothing changes for an activation that names only `brevo`: naming neither `brevo_events` nor `brevo_attributes` sends events, as before. Name `brevo_attributes` alone to send attributes instead of events, or both. With `brevo_attributes` the migration adds the `Activity` table.
+
+### An activation without brevo compiles
+
+`MarketingQuery` and `MarketingMutation` are tagged `plugin_feature_svc = "brevo"`, like every rpc in them and every table they read or write. Without the feature, the feature filter dropped `types/models.proto` but kept the two service files, each now holding an empty service and an import of the dropped file, so no activation without `brevo` compiled (`open …/types/models.proto: no such file`). Both files now drop with the models.
+
+### A contact without an address says so
+
+`ContactRow.email` is declared `(w17.field).null`: an erased contact keeps no address, and a generated query that can fill a field with SQL NULL must now say so. The lookup by address is unchanged — its `WHERE c.email = :email` already guarantees one. No wire or handler change.
+
 ## 0.1.0-rc.5
 
 ### Contacts without marketing consent are no longer subscribed to campaigns
