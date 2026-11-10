@@ -52,6 +52,7 @@ func (m *hostMock) AssignRoleToUser(_ context.Context, in *pb.AssignRoleToUserRe
 
 func (m *hostMock) SetOrgSignUpPolicyRow(_ context.Context, in *pb.SetOrgSignUpPolicyRowReq, _ ...grpc.CallOption) (*pb.SetOrgSignUpPolicyRowResp, error) {
 	m.policySet = append(m.policySet, fmt.Sprintf("%s/%s/%v/%s", in.GetOrgId(), in.GetKind(), in.GetOpen(), in.GetRole()))
+	m.policySnap = append(m.policySnap, in.GetRoleSnapshot())
 	return &pb.SetOrgSignUpPolicyRowResp{}, nil
 }
 
@@ -65,7 +66,7 @@ func (m *hostMock) EndOrgSignUpPolicyRow(_ context.Context, in *pb.EndOrgSignUpP
 func signupFixture() *hostMock {
 	m := hostFixture()
 	m.policies = map[string][]*pb.OrgSignUpPolicyRow{"org-acme": {
-		{Kind: "client", Open: true, Role: "member"},
+		{Kind: "client", Open: true, Role: "member", RoleSnapshot: "role-member:3"},
 		{Kind: "staff", Open: false},
 	}}
 	m.roles = []*pb.OrgRoleRow{{Id: "role-member", Name: "member"}, {Id: "role-admin", Name: "org-admin"}}
@@ -255,6 +256,90 @@ func TestSetOrgSignUpPolicy_HoldsTheRoleToTheCallersCeiling(t *testing.T) {
 	if !slices.Equal(m.policySet, []string{"org-acme/staff/false/", "org-acme/client/true/member", "org-acme/client/true/org-admin"}) {
 		t.Errorf("written %v", m.policySet)
 	}
+}
+
+// SetOrgSignUpPolicy stores, with an open policy, the role as the operator
+// was allowed to hand it out (the ceiling's snapshot) — what the registration
+// holds the role to later. A closed policy grants nothing and stores none.
+func TestSetOrgSignUpPolicy_StoresTheRoleSnapshot(t *testing.T) {
+	m := signupFixture()
+	h := &AuthServiceHandler{Query: m, Mutation: m, Lock: signupPolicyLock()}
+	ops := withHeldPermissions(whoAmICtx("ops", ""), "ops", 1, 2, 3)
+	if _, err := h.SetOrgSignUpPolicy(ops, &pb.SetOrgSignUpPolicyReq{OrgId: "org-acme", Kind: "client", Open: true, Role: "member"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.SetOrgSignUpPolicy(ops, &pb.SetOrgSignUpPolicyReq{OrgId: "org-acme", Kind: "staff", Role: "member"}); err != nil {
+		t.Fatal(err)
+	}
+	all := withHeldPermissions(whoAmICtx("root", ""), "root", 1, 2, 3, 4)
+	if _, err := h.SetOrgSignUpPolicy(all, &pb.SetOrgSignUpPolicyReq{OrgId: "org-acme", Kind: "client", Open: true, Role: "org-admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"role-member:3", "", "role-admin:*"}; !slices.Equal(m.policySnap, want) {
+		t.Errorf("snapshots stored %q, want %q", m.policySnap, want)
+	}
+}
+
+// The registration grants the policy's role as it is THEN, so it is held,
+// under the organization's lock, to the snapshot the policy stored: a role
+// widened since the policy was set, a different role answering to the name,
+// a policy with no snapshot (set before snapshots were stored, never checked)
+// and a policy no longer open for the kind all refuse the registration, with
+// no membership and no grant written. The same role joins, and so does a
+// wildcard that still is one.
+func TestWriteSignUpJoin_HoldsTheRoleToThePolicysSnapshot(t *testing.T) {
+	join := &orgJoin{orgID: "org-acme", kind: "client", role: "member"}
+	for _, c := range []struct {
+		name   string
+		mutate func(m *hostMock)
+	}{
+		{"the role widened since the policy was set", func(m *hostMock) {
+			m.roleGrants[0] = &pb.RoleGrant{RoleId: "role-member", PermissionIds: []int32{3, 4}}
+		}},
+		{"the role became a wildcard", func(m *hostMock) {
+			m.roleGrants[0] = &pb.RoleGrant{RoleId: "role-member", AllPermissions: true}
+		}},
+		{"another role answers to the name", func(m *hostMock) {
+			m.policies["org-acme"][0].RoleSnapshot = "role-old-member:3"
+		}},
+		{"a policy set before snapshots were stored", func(m *hostMock) {
+			m.policies["org-acme"][0].RoleSnapshot = ""
+		}},
+		{"the policy was closed since the registration was requested", func(m *hostMock) {
+			m.policies["org-acme"][0] = &pb.OrgSignUpPolicyRow{Kind: "client", Open: false}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := signupFixture()
+			c.mutate(m)
+			h := &AuthServiceHandler{Query: m, Mutation: m, Lock: signupPolicyLock()}
+			err := writeSignUpJoin(context.Background(), h, "u-new", join)
+			if status.Code(err) != codes.FailedPrecondition || refusalCodeOf(err) != CodeSignUpPolicyStale {
+				t.Errorf("err = %v, want FailedPrecondition %s", err, CodeSignUpPolicyStale)
+			}
+			if len(m.joined) != 0 || len(m.granted) != 0 {
+				t.Errorf("a refused registration wrote: joined %v, granted %v", m.joined, m.granted)
+			}
+		})
+	}
+	t.Run("the same role", func(t *testing.T) {
+		m := signupFixture()
+		h := &AuthServiceHandler{Query: m, Mutation: m, Lock: signupPolicyLock()}
+		if err := writeSignUpJoin(context.Background(), h, "u-new", join); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(m.granted, []string{"u-new/org-acme/role-member"}) {
+			t.Errorf("granted %v", m.granted)
+		}
+	})
+	t.Run("a wildcard that is still one", func(t *testing.T) {
+		m := signupFixture()
+		m.policies["org-acme"][0] = &pb.OrgSignUpPolicyRow{Kind: "client", Open: true, Role: "org-admin", RoleSnapshot: "role-admin:*"}
+		h := &AuthServiceHandler{Query: m, Mutation: m, Lock: signupPolicyLock()}
+		if err := writeSignUpJoin(context.Background(), h, "u-new", &orgJoin{orgID: "org-acme", kind: "client", role: "org-admin"}); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 // GetHostOrg tells a sign-up page which kinds may register on the host.

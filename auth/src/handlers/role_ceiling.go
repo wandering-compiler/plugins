@@ -187,7 +187,8 @@ func allHeld(carried []int32, held map[int32]bool) bool {
 
 // checkMayGrantRole refuses a role above the caller's ceiling, and otherwise
 // returns the role's snapshot — what it carried at the moment it was checked —
-// for a grant that is written later (an invitation) to be held to.
+// for a grant that is written later (an invitation, an open registration
+// policy) to be held to.
 func (h *AuthServiceHandler) checkMayGrantRole(ctx context.Context, roleID string) (string, error) {
 	grantable, err := h.grantableRoleIDs(ctx)
 	if err != nil {
@@ -219,26 +220,34 @@ func (h *AuthServiceHandler) checkMayGrantRole(ctx context.Context, roleID strin
 // everything, and the role still means everything. A role that stopped being
 // a wildcard is a different role, whatever it now lists.
 func (h *AuthServiceHandler) checkRoleWithinSnapshot(ctx context.Context, roleID, snapshot string) error {
-	snapRole, snapPerms, ok := decodeRoleSnapshot(snapshot)
-	if !ok || snapRole != roleID {
-		return status.Error(codes.FailedPrecondition, errRoleMovedSinceInvite.Error())
-	}
-	grants, err := h.roleGrants(ctx)
+	within, err := h.roleWithinSnapshot(ctx, roleID, snapshot)
 	if err != nil {
 		return err
 	}
-	g, known := grants[roleID]
-	if known && snapPerms == nil {
-		if g.GetAllPermissions() {
-			return nil
-		}
-		return status.Error(codes.FailedPrecondition, errRoleMovedSinceInvite.Error())
-	}
-	carried := expandRoleGrant(g, h.Lock)
-	if !known || carried == nil || !allHeld(carried, snapPerms) {
+	if !within {
 		return status.Error(codes.FailedPrecondition, errRoleMovedSinceInvite.Error())
 	}
 	return nil
+}
+
+// roleWithinSnapshot is checkRoleWithinSnapshot's predicate, for a caller
+// that refuses in words of its own (an open registration policy,
+// org_signup.go). An empty or unreadable snapshot is never within.
+func (h *AuthServiceHandler) roleWithinSnapshot(ctx context.Context, roleID, snapshot string) (bool, error) {
+	snapRole, snapPerms, ok := decodeRoleSnapshot(snapshot)
+	if !ok || snapRole != roleID {
+		return false, nil
+	}
+	grants, err := h.roleGrants(ctx)
+	if err != nil {
+		return false, err
+	}
+	g, known := grants[roleID]
+	if known && snapPerms == nil {
+		return g.GetAllPermissions(), nil
+	}
+	carried := expandRoleGrant(g, h.Lock)
+	return known && carried != nil && allHeld(carried, snapPerms), nil
 }
 
 // encodeRoleSnapshot renders `<role id>:<sorted ids>`. Sorted so the same role

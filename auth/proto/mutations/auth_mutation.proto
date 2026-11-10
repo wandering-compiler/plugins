@@ -2328,6 +2328,8 @@ message SetOrgSignUpPolicyRowReq {
     (w17.field) = { type: TEXT, blank: true },
     (w17.contrib.plugin_feature_field) = "product_roles"
   ];
+  // See OrgSignUpPolicy.role_snapshot ('' on a closed policy).
+  string role_snapshot = 7 [(w17.field) = { type: TEXT, blank: true }];
 }
 message SetOrgSignUpPolicyRowResp {
   option (w17.contrib.plugin_feature) = "org_signup";
@@ -6316,6 +6318,7 @@ service AuthMutation {
           "open = :open, "
           "role = :role, "
           "set_by = :set_by, "
+          "role_snapshot = :role_snapshot, "
           "?feature(product_roles) product_roles = :product_roles "
           "RETURNING id AS id"
       }

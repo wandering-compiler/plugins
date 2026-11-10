@@ -263,6 +263,11 @@ const (
 	CodeSignUpPolicyInvalid     = "SIGNUP_POLICY_INVALID"
 	CodeSignUpKindAmbiguous     = "SIGNUP_KIND_AMBIGUOUS"
 	CodeSignUpHostConflict      = "SIGNUP_HOST_CONFLICT"
+	// CodeSignUpPolicyStale: a registration an open policy admits whose role
+	// is no longer the one the operator setting the policy was checked
+	// against (widened, another role under the name), or whose policy holds
+	// no such check (set before it was stored, or no longer open).
+	CodeSignUpPolicyStale = "SIGNUP_POLICY_STALE"
 	// org_two_factor_policy: the backoffice's policy calls from inside an
 	// organization; a policy value that is none of the three, or a kind the
 	// deployment's memberships do not have.
@@ -519,6 +524,7 @@ const (
 	MsgSignUpPolicyRole            = "Choose the role people get when they register."
 	MsgSignUpKindAmbiguous         = "Registration here is not set up correctly. Contact the organization."
 	MsgSignUpHostConflict          = "This registration names another address than the one it arrived on."
+	MsgSignUpPolicyStale           = "Registration here is paused until the organization confirms its settings again. Contact the organization."
 	MsgTwoFactorPoliciesRealmOnly  = "From inside an organization, change its two-step sign-in in the organization's own settings."
 	MsgTwoFactorPolicyValue        = "Choose required, enrol, optional or disabled."
 	MsgTwoFactorEnrolUnavailable   = "Setting up an authenticator at sign-in is not available here."
