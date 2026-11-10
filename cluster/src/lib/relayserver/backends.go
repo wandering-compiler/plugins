@@ -25,9 +25,10 @@ import (
 const TicketHeader = "w17-cluster-ticket"
 
 // EngineHeader names the engine a call expects (ReserveTaskReq.engine). The
-// proxy refuses a call naming another engine than its reservation's, and
-// passes the header on: the worker routes on it. A call without it is let
-// through — the work goes to a worker running the reservation's engine anyway.
+// proxy refuses a call naming another engine than its reservation's; a call
+// without it is let through. Either way the caller's value never reaches the
+// worker: the relay forwards the RESERVATION's engine under this key (none
+// for a reservation that bound none), and the worker routes on that.
 const EngineHeader = "w17-cluster-engine"
 
 // Backends is the set of workers currently attached to this relay.
@@ -772,11 +773,22 @@ func TicketPicker(pool *relaycore.Pool, backends *Backends, workers *workeradmit
 		// CONNECTION from here, and a leak would shrink the pool silently
 		// until a restart.
 		var once sync.Once
+		// The engine header the worker routes on is the relay's word, not the
+		// caller's: the caller's value is dropped and the reservation's engine
+		// sent in its place. So a caller cannot pick an engine the control
+		// plane did not bind (a reservation that bound none forwards none), and
+		// a client from before engines, which sends no header, still reaches
+		// the right engine on a worker that runs several.
+		var set map[string]string
+		if engine != "" {
+			set = map[string]string{EngineHeader: engine}
+		}
 		return tunnel.Backend{
 			Conn: conn,
-			// Spent here; the worker has no use for it, and a header the
-			// relay consumed is not the caller's to hand on.
-			Consumed: []string{TicketHeader},
+			// Spent here; the worker has no use for the ticket, and a header
+			// the relay consumed is not the caller's to hand on.
+			Consumed: []string{TicketHeader, EngineHeader},
+			Set:      set,
 			Release: func() {
 				once.Do(func() {
 					// Both books, exactly once: the pool's slot AND the

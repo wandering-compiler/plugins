@@ -490,3 +490,24 @@ func TestHandler_TheKeysThePickerConsumedStopAtTheRelay(t *testing.T) {
 	}
 	rel.await(t)
 }
+
+// A key the picker Sets reaches the worker with the picker's value, never the
+// caller's: the caller's own value under that key is dropped first.
+func TestHandler_TheKeysThePickerSetsReplaceTheCallers(t *testing.T) {
+	w := newWorker()
+	backend, _ := reversed(t, w, nil)
+	rel := newReleases()
+	cc := proxy(t, func(context.Context, string) (Backend, error) {
+		return Backend{Conn: backend, Release: rel.release,
+			Consumed: []string{"w17-cluster-engine"},
+			Set:      map[string]string{"w17-cluster-engine": "v0.1.0-rc.71"}}, nil
+	})
+	ctx := metadata.AppendToOutgoingContext(bounded(t), "w17-cluster-engine", "v9.9.9")
+	if _, err := pb.NewClusterServiceClient(cc).ReserveTask(ctx, &pb.ReserveTaskReq{Label: "build acme"}); err != nil {
+		t.Fatalf("a call through the proxy failed: %v", err)
+	}
+	if got := w.metadata().Get("w17-cluster-engine"); len(got) != 1 || got[0] != "v0.1.0-rc.71" {
+		t.Errorf("the worker saw engine %q, want only the picker's v0.1.0-rc.71", got)
+	}
+	rel.await(t)
+}

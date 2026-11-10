@@ -128,6 +128,56 @@ func TestTicketPicker_ACallNamingNoEngineIsLetThrough(t *testing.T) {
 	be.Release()
 }
 
+// The engine header the worker routes on is the relay's: the reservation's
+// engine replaces whatever the caller sent, a call sending none gets it, and
+// a reservation that bound no engine forwards none — so the caller can never
+// choose its engine.
+func TestTicketPicker_TheForwardedEngineIsTheReservations(t *testing.T) {
+	b := NewBackends()
+	pool := poolWith(t, 3)
+	srv := tunnelTo(t, b, "w")
+	defer srv.Stop()
+	pick := TicketPicker(pool, b, nil)
+
+	bound, err := pool.ReserveEngine("", "v0.1.0-rc.71")
+	if err != nil {
+		t.Fatal(err)
+	}
+	be, err := pickWith(pick, bound.Grant.Ticket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := be.Set[EngineHeader]; got != "v0.1.0-rc.71" {
+		t.Errorf("a call naming no engine is forwarded with engine %q; want the reservation's", got)
+	}
+	if !contains(be.Consumed, EngineHeader) {
+		t.Error("the caller's engine header is not dropped before forwarding")
+	}
+	be.Release()
+
+	unbound, err := pool.ReserveEngine("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	be, err = pickNaming(pick, unbound.Grant.Ticket, "v0.2.0-rc.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := be.Set[EngineHeader]; ok || !contains(be.Consumed, EngineHeader) {
+		t.Errorf("a reservation that bound no engine forwards the caller's choice: set=%v consumed=%v", be.Set, be.Consumed)
+	}
+	be.Release()
+}
+
+func contains(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
 // ReserveTask for an engine the attached fleet does not run is refused with
 // the reason a control plane falls through on; one it runs is granted.
 func TestServer_ReserveTaskRefusesAnEngineNoWorkerRuns(t *testing.T) {

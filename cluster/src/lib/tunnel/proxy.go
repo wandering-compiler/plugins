@@ -21,6 +21,10 @@ type Backend struct {
 	// (the relay's ticket). They are the relay's, not the worker's contract,
 	// and are removed before the call is forwarded; everything else travels.
 	Consumed []string
+	// Set names metadata the picker vouches for and forwards in place of
+	// whatever the caller sent under the same key (after Consumed is
+	// removed): the relay's own word to the worker, never the caller's.
+	Set map[string]string
 }
 
 // Picker chooses a worker for one incoming call. It must block, or fail, when
@@ -57,6 +61,9 @@ func Handler(pick Picker) grpc.StreamHandler {
 		md = md.Copy()
 		for _, k := range be.Consumed {
 			md.Delete(k)
+		}
+		for k, v := range be.Set {
+			md.Set(k, v)
 		}
 		ctx, cancel := context.WithCancel(metadata.NewOutgoingContext(ss.Context(), md))
 		defer cancel()
