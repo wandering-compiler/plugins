@@ -313,6 +313,31 @@ func TestWorkerStore_DecideNeverLowersTheVersion(t *testing.T) {
 	}
 }
 
+// Two replicas whose clocks both lag the newest decision read the same newest
+// time. Moved past it by a fixed step, both recorded the SAME version, and a
+// relay applies a set at an equal version: the set one of them read between
+// the two commits could replace the newer one. The step now carries a random
+// microsecond part, so lagging decisions do not share a version.
+func TestWorkerStore_LaggingDecisionsDoNotShareAVersion(t *testing.T) {
+	ahead := time.Now().Add(time.Hour)
+	tb := &tablesServer{banVersion: timestamppb.New(ahead)}
+	_, workers := serveTables(t, tb)
+	seen := map[time.Time]bool{}
+	for range 20 {
+		if err := workers.Decide(t.Context(), []string{"w-1"}, true, "op-1"); err != nil {
+			t.Fatal(err)
+		}
+		at := tb.bans[len(tb.bans)-1].GetAt().AsTime()
+		if !at.After(ahead) || at.Sub(ahead) > 2*time.Millisecond || !at.Equal(at.Truncate(time.Microsecond)) {
+			t.Fatalf("decision at %v: want whole microseconds within (newest, newest+2ms], newest %v", at, ahead)
+		}
+		seen[at] = true
+	}
+	if len(seen) < 2 {
+		t.Errorf("20 decisions behind the same newest one all recorded %v — lagging replicas would share a version", seen)
+	}
+}
+
 func TestWorkerStore_DecideRoutesBanAndUnban(t *testing.T) {
 	tb := &tablesServer{}
 	_, workers := serveTables(t, tb)
