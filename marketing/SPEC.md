@@ -116,7 +116,7 @@ gap, not a promise. The handler tests run against a fake Brevo and in-memory
    blacklists again when a no overtook it.
 6. **`brevo_attributes` is not measured against an account yet.** The date
    format (`YYYY-MM-DD`), the `text` type of `W17_LAST_ACTIVITY_AT` and the
-   attribute names (`W17_<SERVICE>_<METHOD>`, up to 255 characters) follow
+   attribute names (`W17_<SERVICE>_<METHOD>`, cut at 255 characters with the prefix: `TestActivityAttr`) follow
    Brevo's reference; the stub refuses a malformed date, which is what Brevo
    is expected to do and not measured. Brevo's limits on an attribute name's length and on how many
    attributes an account may hold are not documented there: a name it refuses
