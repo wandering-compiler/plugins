@@ -39,7 +39,7 @@ env:
   - name: send
     type: string
     default: "mutations"
-    description: "Which recorded requests reach Brevo (as events, attributes or both): mutations (default), queries, all, or off. A method reads when it is served as GET or belongs to a Query service; everything else is a mutation."
+    description: "Which recorded requests reach Brevo (as events, attributes or both): mutations (default), queries, all, or off. off sends no method by its kind; the methods `include` names are still sent, so empty `include` too to stop sending altogether. A method reads when it is served as GET or belongs to a Query service; everything else is a mutation."
   - name: include
     type: string
     description: "Comma-separated methods sent whatever `send` says (`/<package>.<Service>/<Method>`, as a record names them). A name the stream does not record is refused at boot."
