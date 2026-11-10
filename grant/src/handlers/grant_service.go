@@ -93,7 +93,8 @@ func invalid(field, why string) error {
 }
 
 // ProposeEnvelope writes a new proposed version for the organization the
-// caller acts in. It is shown nowhere until the backoffice approves it.
+// caller acts in. It is shown nowhere until the backoffice approves it, and
+// refused while another proposal of the organization waits.
 func (h *GrantServiceHandler) ProposeEnvelope(ctx context.Context, req *pb.ProposeEnvelopeReq) (*pb.EnvelopeVersion, error) {
 	caller, orgID, err := inOrg(ctx)
 	if err != nil {
@@ -104,6 +105,15 @@ func (h *GrantServiceHandler) ProposeEnvelope(ctx context.Context, req *pb.Propo
 		f = &pb.EnvelopeFields{}
 	}
 	if err := checkFields(f); err != nil {
+		return nil, err
+	}
+	// One proposal per organization waits at a time. Without it a member
+	// proposing in a loop grew the backoffice's list, and the table (nothing
+	// is deleted), without bound. Read, then written: two proposals racing
+	// for one organization can both land (SPEC.md, Gaps).
+	if _, err := h.Query.GetPendingEnvelope(ctx, &pb.GetPendingEnvelopeReq{OrgId: orgID}); err == nil {
+		return nil, status.Error(codes.FailedPrecondition, "grant: a proposal of this organization is already waiting for a decision; propose again once it is decided")
+	} else if status.Code(err) != codes.NotFound {
 		return nil, err
 	}
 	resp, err := h.Mutation.InsertEnvelope(ctx, &pb.InsertEnvelopeReq{
@@ -119,7 +129,7 @@ func (h *GrantServiceHandler) ProposeEnvelope(ctx context.Context, req *pb.Propo
 	return &pb.EnvelopeVersion{Id: resp.GetId(), OrgId: orgID, Status: StatusProposed, Fields: f}, nil
 }
 
-// GetMyEnvelopes is every version of the caller's organization, newest
+// GetMyEnvelopes is the caller's organization's newest 100 versions, newest
 // first: what is shown, what waits, what was refused and why.
 func (h *GrantServiceHandler) GetMyEnvelopes(ctx context.Context, _ *pb.GetMyEnvelopesReq) (*pb.EnvelopeVersionsResp, error) {
 	_, orgID, err := inOrg(ctx)
@@ -133,7 +143,8 @@ func (h *GrantServiceHandler) GetMyEnvelopes(ctx context.Context, _ *pb.GetMyEnv
 	return versions(rows.GetEnvelopes()), nil
 }
 
-// ListEnvelopeProposals is what waits for the backoffice.
+// ListEnvelopeProposals is what waits for the backoffice: the oldest 200,
+// oldest first.
 func (h *GrantServiceHandler) ListEnvelopeProposals(ctx context.Context, _ *pb.ListEnvelopeProposalsReq) (*pb.EnvelopeVersionsResp, error) {
 	if _, err := h.realmOnly(ctx, "ListEnvelopeProposals"); err != nil {
 		return nil, err

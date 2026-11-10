@@ -41,6 +41,9 @@ message ListOrgEnvelopesReq {
   string org_id = 1 [(w17.field) = { type: UUID }];
 }
 message ListPendingEnvelopesReq {}
+message GetPendingEnvelopeReq {
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
 message EnvelopeRowsResp {
   repeated EnvelopeRow envelopes = 1;
 }
@@ -54,18 +57,26 @@ service GrantQuery {
     };
   }
 
-  // ListOrgEnvelopes — every version of one organization, newest first.
-  rpc ListOrgEnvelopes(ListOrgEnvelopesReq) returns (EnvelopeRowsResp) {
+  // GetPendingEnvelope — the organization's proposal waiting for the
+  // backoffice; NotFound when none waits. One at a time (ProposeEnvelope).
+  rpc GetPendingEnvelope(GetPendingEnvelopeReq) returns (EnvelopeRow) {
     option (w17.db.method) = {
-      ops: { name: "main", dql: "SELECT e.id AS id, e.org_id AS org_id, e.status AS status, e.display_name AS display_name, e.logo_light_url AS logo_light_url, e.logo_dark_url AS logo_dark_url, e.verified_host AS verified_host, e.website_url AS website_url, e.support_url AS support_url, e.privacy_url AS privacy_url, e.terms_url AS terms_url, e.accent_color AS accent_color, e.default_language AS default_language, e.operated_by AS operated_by, e.proposed_at AS proposed_at, e.decided_at AS decided_at, e.decision_note AS decision_note FROM @module.Envelope e WHERE e.org_id = :org_id ORDER BY e.proposed_at DESC, e.id DESC" }
+      ops: { name: "main", dql: "SELECT e.id AS id, e.org_id AS org_id, e.status AS status, e.display_name AS display_name, e.logo_light_url AS logo_light_url, e.logo_dark_url AS logo_dark_url, e.verified_host AS verified_host, e.website_url AS website_url, e.support_url AS support_url, e.privacy_url AS privacy_url, e.terms_url AS terms_url, e.accent_color AS accent_color, e.default_language AS default_language, e.operated_by AS operated_by, e.proposed_at AS proposed_at, e.decided_at AS decided_at, e.decision_note AS decision_note FROM @module.Envelope e WHERE e.org_id = :org_id AND e.status = 'proposed' ORDER BY e.proposed_at ASC, e.id ASC LIMIT 1" }
     };
   }
 
-  // ListPendingEnvelopes — the proposals waiting for the backoffice, oldest
-  // first.
+  // ListOrgEnvelopes — the organization's newest 100 versions, newest first.
+  rpc ListOrgEnvelopes(ListOrgEnvelopesReq) returns (EnvelopeRowsResp) {
+    option (w17.db.method) = {
+      ops: { name: "main", dql: "SELECT e.id AS id, e.org_id AS org_id, e.status AS status, e.display_name AS display_name, e.logo_light_url AS logo_light_url, e.logo_dark_url AS logo_dark_url, e.verified_host AS verified_host, e.website_url AS website_url, e.support_url AS support_url, e.privacy_url AS privacy_url, e.terms_url AS terms_url, e.accent_color AS accent_color, e.default_language AS default_language, e.operated_by AS operated_by, e.proposed_at AS proposed_at, e.decided_at AS decided_at, e.decision_note AS decision_note FROM @module.Envelope e WHERE e.org_id = :org_id ORDER BY e.proposed_at DESC, e.id DESC LIMIT 100" }
+    };
+  }
+
+  // ListPendingEnvelopes — the oldest 200 proposals waiting for the
+  // backoffice, oldest first; deciding them brings the next ones up.
   rpc ListPendingEnvelopes(ListPendingEnvelopesReq) returns (EnvelopeRowsResp) {
     option (w17.db.method) = {
-      ops: { name: "main", dql: "SELECT e.id AS id, e.org_id AS org_id, e.status AS status, e.display_name AS display_name, e.logo_light_url AS logo_light_url, e.logo_dark_url AS logo_dark_url, e.verified_host AS verified_host, e.website_url AS website_url, e.support_url AS support_url, e.privacy_url AS privacy_url, e.terms_url AS terms_url, e.accent_color AS accent_color, e.default_language AS default_language, e.operated_by AS operated_by, e.proposed_at AS proposed_at, e.decided_at AS decided_at, e.decision_note AS decision_note FROM @module.Envelope e WHERE e.status = 'proposed' ORDER BY e.proposed_at ASC, e.id ASC" }
+      ops: { name: "main", dql: "SELECT e.id AS id, e.org_id AS org_id, e.status AS status, e.display_name AS display_name, e.logo_light_url AS logo_light_url, e.logo_dark_url AS logo_dark_url, e.verified_host AS verified_host, e.website_url AS website_url, e.support_url AS support_url, e.privacy_url AS privacy_url, e.terms_url AS terms_url, e.accent_color AS accent_color, e.default_language AS default_language, e.operated_by AS operated_by, e.proposed_at AS proposed_at, e.decided_at AS decided_at, e.decision_note AS decision_note FROM @module.Envelope e WHERE e.status = 'proposed' ORDER BY e.proposed_at ASC, e.id ASC LIMIT 200" }
     };
   }
 

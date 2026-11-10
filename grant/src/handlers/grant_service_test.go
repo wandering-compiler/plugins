@@ -78,6 +78,15 @@ func (s *store) GetApprovedEnvelope(_ context.Context, in *pb.GetApprovedEnvelop
 	return nil, status.Error(codes.NotFound, "none")
 }
 
+func (s *store) GetPendingEnvelope(_ context.Context, in *pb.GetPendingEnvelopeReq, _ ...grpc.CallOption) (*pb.EnvelopeRow, error) {
+	for _, e := range s.envelopes {
+		if e.GetOrgId() == in.GetOrgId() && e.GetStatus() == StatusProposed {
+			return e, nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "none")
+}
+
 // as is a request from userID, acting in orgID ("" = realm-wide).
 func as(userID, orgID string) context.Context {
 	env := protowire.AppendTag(nil, 2, protowire.BytesType)
@@ -287,5 +296,37 @@ func TestEnvelopeDecisions_AnswerWhatWasDecided(t *testing.T) {
 		got.GetFields().GetDisplayName() != "Acme 2" || got.GetDecisionNote() != "logo missing" ||
 		got.GetProposedAt() == nil || got.GetDecidedAt() == nil {
 		t.Errorf("reject answered %+v, want the whole rejected version", got)
+	}
+}
+
+// One proposal per organization waits at a time: a second one while the
+// first waits is refused and writes nothing, so a member proposing in a loop
+// cannot grow the backoffice's list (or the table) without bound. Once the
+// backoffice decided the first, the organization proposes again; another
+// organization's proposal is its own.
+func TestProposeEnvelope_OnePendingPerOrganization(t *testing.T) {
+	s := &store{}
+	h := &GrantServiceHandler{Query: s, Mutation: s, Lock: &acllock.Lock{Permissions: map[string]int{"GRANT_GRANT_SERVICE_REJECT_ENVELOPE": 1}}}
+	propose := func(org, name string) (*pb.EnvelopeVersion, error) {
+		return h.ProposeEnvelope(as("admin", org), &pb.ProposeEnvelopeReq{Fields: &pb.EnvelopeFields{DisplayName: name}})
+	}
+	v1, err := propose("org-acme", "Acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := propose("org-acme", "Acme again"); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("a second proposal while one waits: err = %v, want FailedPrecondition", err)
+	}
+	if len(s.envelopes) != 1 {
+		t.Fatalf("the refused proposal wrote a row: %d rows", len(s.envelopes))
+	}
+	if _, err := propose("org-other", "Other"); err != nil {
+		t.Fatalf("another organization's proposal: %v", err)
+	}
+	if _, err := h.RejectEnvelope(as("ops", ""), &pb.RejectEnvelopeReq{Id: v1.GetId(), Note: "no"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := propose("org-acme", "Acme, fixed"); err != nil {
+		t.Fatalf("a proposal after the first was decided: %v", err)
 	}
 }
