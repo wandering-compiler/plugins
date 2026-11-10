@@ -49,14 +49,14 @@ type stripeFake struct {
 	intents   map[string]*fakeIntent
 	declined  map[string]bool // customer id → card declines
 	failQueue []int
-	requests  map[string]int    // path → requests that reached the handler logic
-	subStatus string            // status a created subscription reports ("" = active)
+	requests  map[string]int // path → requests that reached the handler logic
+	subStatus string         // status a created subscription reports ("" = active)
 	// silentReceived answers intents without amount_received — a driver or
 	// mock answering the pinned shape without the field.
 	silentReceived bool
-	origins   map[string]string // object id → metadata[w17_payment] it was created with
-	installs  map[string]string // object id → metadata[w17_install] it was created with
-	refunds   []*fakeRefund     // in creation order
+	origins        map[string]string // object id → metadata[w17_payment] it was created with
+	installs       map[string]string // object id → metadata[w17_install] it was created with
+	refunds        []*fakeRefund     // in creation order
 	// refundStatus is the status a created refund answers with ("" =
 	// succeeded); setRefundStatus moves one later.
 	refundStatus string
