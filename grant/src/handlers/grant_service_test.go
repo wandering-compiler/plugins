@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
+	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
 	pb "github.com/wandering-compiler/plugins/grant/gen/pb"
 )
@@ -143,17 +144,44 @@ func TestProposeNeedsAnOrganization(t *testing.T) {
 
 // raceMutation answers ApproveEnvelopeRow as the unique index does when
 // another version of the organization was approved at the same moment.
-type raceMutation struct{ pb.GrantMutationClient }
-
-func (raceMutation) ApproveEnvelopeRow(context.Context, *pb.ApproveEnvelopeRowReq, ...grpc.CallOption) (*pb.ApproveEnvelopeRowResp, error) {
-	return nil, status.Error(codes.AlreadyExists, "unique violation")
+type raceMutation struct {
+	pb.GrantMutationClient
+	err error
 }
 
-// The approval that loses the race is told so, not handed a storage error.
+func (m raceMutation) ApproveEnvelopeRow(context.Context, *pb.ApproveEnvelopeRowReq, ...grpc.CallOption) (*pb.ApproveEnvelopeRowResp, error) {
+	return nil, m.err
+}
+
+// uniqueViolation is the shape generated storage answers a write the unique
+// (org_id, approved_slot) index refuses: InvalidArgument carrying an
+// ErrorDetail{code: UNIQUE_VIOLATION} (grpcerr.Wrap collapses constraint
+// violations into InvalidArgument; the detail tells them apart).
+func uniqueViolation(t *testing.T) error {
+	t.Helper()
+	st, err := status.New(codes.InvalidArgument, "unique violation").WithDetails(&w17pb.ErrorDetail{Code: "UNIQUE_VIOLATION"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st.Err()
+}
+
+// The approval that loses the race is told so, not handed a storage error —
+// in the shape storage emits (InvalidArgument + UNIQUE_VIOLATION) and in the
+// AlreadyExists one. Any other InvalidArgument stays what it is.
 func TestApproveEnvelopeRace(t *testing.T) {
-	h := &GrantServiceHandler{Mutation: raceMutation{}, Lock: &acllock.Lock{Permissions: map[string]int{"GRANT_GRANT_SERVICE_APPROVE_ENVELOPE": 1}}}
-	if _, err := h.ApproveEnvelope(as("ops", ""), &pb.ApproveEnvelopeReq{Id: "x"}); status.Code(err) != codes.Aborted {
-		t.Errorf("err = %v, want Aborted", err)
+	for name, tc := range map[string]struct {
+		err  error
+		want codes.Code
+	}{
+		"storage shape":  {uniqueViolation(t), codes.Aborted},
+		"already exists": {status.Error(codes.AlreadyExists, "unique violation"), codes.Aborted},
+		"other invalid":  {status.Error(codes.InvalidArgument, "bad id"), codes.InvalidArgument},
+	} {
+		h := &GrantServiceHandler{Mutation: raceMutation{err: tc.err}, Lock: &acllock.Lock{Permissions: map[string]int{"GRANT_GRANT_SERVICE_APPROVE_ENVELOPE": 1}}}
+		if _, err := h.ApproveEnvelope(as("ops", ""), &pb.ApproveEnvelopeReq{Id: "x"}); status.Code(err) != tc.want {
+			t.Errorf("%s: err = %v, want %s", name, err, tc.want)
+		}
 	}
 }
 
