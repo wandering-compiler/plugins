@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,5 +114,33 @@ func TestLoadOrCreateIdentity_KeyIsNotWorldReadable(t *testing.T) {
 	}
 	if mode := info.Mode().Perm(); mode&0o077 != 0 {
 		t.Errorf("worker.key is %04o — readable beyond its owner", mode)
+	}
+}
+
+// A key write that fails halfway (a disk filling up) leaves NOTHING behind —
+// not a truncated key the next start would refuse as half-written, telling
+// the operator to remove both and lose the identity. The relay identity and
+// the CA are written whole or not at all, so the next start simply mints.
+func TestLoadOrCreate_AWriteFailingHalfwayLeavesNothing(t *testing.T) {
+	for name, create := range map[string]func(dir string) error{
+		"identity": func(dir string) error { _, err := LoadOrCreateIdentity(dir, "relay"); return err },
+		"CA":       func(dir string) error { _, err := LoadOrCreateCA(dir); return err },
+	} {
+		dir := t.TempDir()
+		writeFile = func(f *os.File, b []byte) (int, error) {
+			n, _ := f.Write(b[:len(b)/2])
+			return n, errors.New("no space left on device")
+		}
+		err := create(dir)
+		writeFile = (*os.File).Write
+		if err == nil {
+			t.Fatalf("%s: a failed write was reported as success", name)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Errorf("%s: a failed write left %v behind", name, entries)
+		}
+		if err := create(dir); err != nil {
+			t.Errorf("%s: the next start could not mint: %v", name, err)
+		}
 	}
 }
