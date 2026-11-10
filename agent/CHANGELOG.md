@@ -1,5 +1,35 @@
 # agent — changelog
 
+## 0.1.0-rc.8
+
+### Calls to tool names the model invented no longer spend `max_tool_calls`
+
+`RunAgent` reserved a round's tool-call budget for every call the model made, including calls to names the caller never declared, which are answered "there is no tool named …" without running. A model that emitted many hallucinated calls in one round ended the run `ResourceExhausted` although no tool ran, the real calls in that round were not applied, and the model never heard its correction. Only calls to declared tools count now.
+
+### Organization, not tenant
+
+- The documentation, comments and tests say organization where they said tenant. No
+  behaviour changes.
+
+### A NULL rate no longer makes a call that did not use that kind unpriced
+
+`GetScopeSpend` and `GetLabelSpend` price each kind of token (fresh input, cached
+input, output) only when the call used it. A price that leaves a kind's rate empty —
+a model with no cache, say — used to make every call of that model unpriced, so
+every call of a scope with a spend cap was refused ("price the model"). Such calls
+are now priced; a call that did use the unpriced kind stays unpriced, and a capped
+scope still refuses it. Regenerate the storage from this release to pick it up.
+
+### A `text_filter` hook that returns no response is skipped
+
+A project filter bound to the `text_filter` hook that returned no response and no error (an early return on a path it did not mean to take) replaced the final answer with the empty string, silently. It is now skipped and logged like a filter that failed, and the answer goes on with the text as it stood. An explicit empty text is still the filter's answer.
+
+### The usage tables reference each other through foreign keys
+
+`Usage.scope_id` and `model_id`, `ModelPrice.model_id`, `ScopeLimit.scope_id`, `UsageLabel.usage_id` and `label_id` (feature `usage_persistence`) now carry a foreign key to the interned row they name (`fk: "@module.<Model>"`, expanded to the activation's own table), `ON DELETE RESTRICT` (`deletion_rule: BLOCK`). A price or a limit recorded for an id that was never interned is refused (`InvalidArgument`, "referenced record does not exist") instead of stored.
+
+Before you deploy it, apply with `migrate apply --checks` (or `W17_MIGRATE_CHECKS=1`): a database holding a row the keys refuse then refuses the migration by the check's name before any of it runs. Each check is `SELECT count(*) FROM <child> WHERE <col> NOT IN (SELECT id FROM <parent>)`.
+
 ## 0.1.0-rc.7
 
 ### Usage counts clamp instead of wrapping, limits answer deterministically, logs keep the caller's text out
