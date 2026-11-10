@@ -301,10 +301,16 @@ func (t *brevoTool) onConsentChanged(ctx context.Context, ev *pb.AuthMarketingCo
 	if user == "" {
 		return nil
 	}
-	at := time.Now().UTC()
-	if ev.GetDecidedAt() != nil {
-		at = ev.GetDecidedAt().AsTime()
+	// The kept decision is the newest by decided_at. One without it cannot be
+	// ordered: dated by its handling it would be the newest on every
+	// redelivery, and an older decision delivered again would overwrite a
+	// newer one. auth always dates the decision; an undated one changes
+	// nothing.
+	if ev.GetDecidedAt() == nil {
+		log.Printf("marketing plugin: a consent decision of user %s without decided_at cannot be ordered; ignored", user)
+		return nil
 	}
+	at := ev.GetDecidedAt().AsTime()
 	if _, err := t.mutation.EnsureContact(ctx, &pb.EnsureContactReq{UserId: user}); err != nil {
 		return fmt.Errorf("marketing plugin: keeping the consent of user %s: %w", user, err)
 	}

@@ -697,7 +697,7 @@ func TestContacts_FollowTheAccounts(t *testing.T) {
 	ctx := context.Background()
 	_ = tl.onUserCreated(ctx, &pb.AuthUserCreated{UserId: "u1", Email: "a@x.example"})
 	_ = tl.onUserUpdated(ctx, &pb.AuthUserUpdated{UserId: "u1", Email: "b@x.example"})
-	_ = tl.onConsentChanged(ctx, &pb.AuthMarketingConsentChanged{UserId: "u1", Consent: false})
+	_ = tl.onConsentChanged(ctx, &pb.AuthMarketingConsentChanged{UserId: "u1", Consent: false, DecidedAt: timestamppb.Now()})
 	_ = tl.onUserDeleted(ctx, &pb.AuthUserDeleted{UserId: "u1"})
 	// Unknown at sign-up: created. Known: updated by its id, the address as
 	// EMAIL — an upsert by POST cannot change an address (Brevo refuses the
@@ -705,7 +705,7 @@ func TestContacts_FollowTheAccounts(t *testing.T) {
 	if strings.Join(f.upserts, ";") != "u1|a@x.example|map[]|bl=true" {
 		t.Errorf("upserts = %v", f.upserts)
 	}
-	// A decision without decided_at is dated by its handling.
+	// The consent attribute is dated by the decision.
 	want := []string{"u1|map[EMAIL:b@x.example]|bl=true", "u1|map[W17_MARKETING_CONSENT:false W17_MARKETING_CONSENT_AT:" + brevoDate(time.Now()) + "]|bl=true"}
 	if strings.Join(f.updates, ";") != strings.Join(want, ";") {
 		t.Errorf("updates = %v\nwant      %v", f.updates, want)
@@ -718,7 +718,7 @@ func TestContacts_FollowTheAccounts(t *testing.T) {
 // The consent for a user Brevo does not know yet creates the contact with it.
 func TestContacts_ConsentBeforeTheContactCreatesIt(t *testing.T) {
 	f := &fakeBrevo{}
-	_ = tool(t, f, &ledger{}, "all", "", "").onConsentChanged(context.Background(), &pb.AuthMarketingConsentChanged{UserId: "u2", Consent: true})
+	_ = tool(t, f, &ledger{}, "all", "", "").onConsentChanged(context.Background(), &pb.AuthMarketingConsentChanged{UserId: "u2", Consent: true, DecidedAt: timestamppb.Now()})
 	if strings.Join(f.upserts, ";") != "u2||map[W17_MARKETING_CONSENT:true W17_MARKETING_CONSENT_AT:"+brevoDate(time.Now())+"]|bl=false" {
 		t.Errorf("upserts = %v", f.upserts)
 	}
@@ -971,5 +971,23 @@ func TestEventFor_TheReferrerWithoutItsQueryAndBoundedUTM(t *testing.T) {
 	ev, _ = eventFor(&w17pb.RequestEventMeta{UserId: "u1", Method: createTask, Client: &w17pb.RequestClient{Referrer: "not a url\x7f"}})
 	if r, ok := ev.EventProperties["referrer"]; ok {
 		t.Errorf("an unparsable referrer was sent: %v", r)
+	}
+}
+
+// A consent event without decided_at cannot be ordered against the decision
+// kept: dated by its handling it would be the newest on every redelivery, and
+// an older no (or yes) delivered again would overwrite a newer decision. It is
+// acknowledged and changes nothing. (auth always dates the decision.)
+func TestConsent_AnUndatedDecisionIsIgnored(t *testing.T) {
+	f := &fakeBrevo{known: map[string]bool{"u1": true}}
+	l := &ledger{contacts: map[string]*pb.ContactRow{"u1": {UserId: "u1", Consent: true, ConsentAt: timestamppb.New(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))}}}
+	if err := tool(t, f, l, "all", "", "").onConsentChanged(context.Background(), &pb.AuthMarketingConsentChanged{UserId: "u1", Consent: false}); err != nil {
+		t.Fatalf("an undated decision: %v, want it acknowledged", err)
+	}
+	if c := l.contacts["u1"]; !c.GetConsent() || !c.GetConsentAt().AsTime().Equal(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("row = %+v, want the dated yes kept", c)
+	}
+	if len(f.updates)+len(f.upserts) != 0 {
+		t.Errorf("an undated decision wrote to Brevo: %v %v", f.updates, f.upserts)
 	}
 }
