@@ -6,7 +6,7 @@ built on it relies on. It is the reference the plugin's tests and the example
 projects are measured against. A property listed here without a proof is a
 gap, not a promise.
 
-It covers plugin version 0.1.0-rc.12.
+It covers plugin version 0.1.0-rc.19 and the unreleased changes in `changes/`.
 
 ## What the plugin is, and what it is not
 
@@ -242,6 +242,19 @@ which.
    it is not stated. A disabled relay receives bans like any other
    registered relay: on each decision, every 5 minutes, and through these
    polls.
+3. **Every caller without a principal is one caller.** A request that
+   carries no principal envelope is held as `internal` — meant for the
+   project's own code, which is one caller. A project that serves
+   `ReserveTask`, `GetReservation` or `CancelReservation` on a route its
+   gateway lets through without an auth method (the ACL allows it) makes
+   every anonymous caller that same holder: one reservation owner, so a
+   leaked handle can be polled, collected and cancelled by any other
+   anonymous caller, and one `--max-queue-per-caller` share bounds the whole
+   unauthenticated surface together rather than each caller.
+   `base/reservation-handle-bound` holds to the letter (a principal-less
+   reservation is usable only without one); binding anonymous callers apart
+   needs an identity the plugin does not have. Put these RPCs behind an auth
+   method when the callers are not the project's own code.
 
 #### Relay queue, capacity and tickets (`relaycore`)
 
