@@ -691,3 +691,30 @@ func TestContactStatements_ANewRowStartsBlacklisted(t *testing.T) {
 		}
 	}
 }
+
+// brevo/reconcile-once: a yes handled between the pass's read of the rows and
+// its blacklisting write is not overwritten for good. The pass records its
+// blacklisting first, writes it, and reads the row again: holding the newest
+// yes, it subscribes the contact on that yes (the blacklist Brevo holds is its
+// own, not the person's), as an address write does.
+func TestReconcile_AConsentLandingDuringThePassStandsSubscribed(t *testing.T) {
+	f := &fakeBrevo{known: map[string]bool{uC: true}, contacts: []brevo.Contact{{ID: 3, ExtID: uC}}}
+	l := &ledger{contacts: map[string]*pb.ContactRow{}}
+	tl := tool(t, f, l, "all", "", "")
+	f.onUpdate = func() {
+		// The person says yes now; the consent handler runs to its end
+		// before the pass's write lands.
+		if err := tl.onConsentChanged(context.Background(), &pb.AuthMarketingConsentChanged{UserId: uC, Consent: true, DecidedAt: timestamppb.New(day2)}); err != nil {
+			t.Errorf("the consent: %v", err)
+		}
+	}
+	if done, err := tl.reconcileBlacklist(context.Background(), "replica-1"); err != nil || !done {
+		t.Fatalf("done %v, err %v", done, err)
+	}
+	if f.blacklisted[uC] {
+		t.Errorf("the contact of a user who said yes during the pass was left blacklisted: updates %v", f.updates)
+	}
+	if c := l.contacts[uC]; c.GetSentBlacklisted() || !c.GetConsent() {
+		t.Errorf("row = %+v, want the yes and sent_blacklisted false", c)
+	}
+}
