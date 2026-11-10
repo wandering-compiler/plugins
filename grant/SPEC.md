@@ -39,7 +39,7 @@ co-brand host reads whose it is there, never from this domain's tiers.
 | grant/one-approved | Approving a version MUST supersede the organization's previous approved one in the same transaction, and a unique index on `(org_id, approved_slot)` MUST keep two racing approvals from both committing (the loser is `Aborted`), on every dialect; nothing is deleted. | Data | `TestEnvelopeLifecycle`, `TestApproveEnvelopeRace` (the loser answered in the shape storage emits — `InvalidArgument` with `ErrorDetail{code: UNIQUE_VIOLATION}` — and as `AlreadyExists`; any other `InvalidArgument` passes through), the `Envelope` index |
 | grant/acl-required | The backoffice's methods MUST be refused unless they are in the deployed ACL lock. | Security | `TestRealmOnlyNeedsTheACL` |
 | grant/seed-contract | A fixture that writes `status = 'approved'` and `approved_slot = 'approved'` MUST be the organization's approved envelope, read publicly and held to one per organization, exactly as an approval leaves it. | Data | `TestEnvelopeStatementsUseTheContractValues` (the values only: it holds the statements and the index to them; that a seeded row is read and that the index refuses a second one is **unit (mock) only** — a live test seeds an approved envelope, reads it with `GetOrgEnvelope`, and asserts a second seeded approved row for the organization is refused) |
-| grant/safe-fields | Links MUST be absolute https (http only for localhost) without credentials; a colour #rrggbb; a host a lower-case DNS name. A proposal breaking a rule MUST be refused, and the public read MUST serve no field of an approved envelope that breaks one (a row seeded by fixture is checked nowhere else): the field is left out, the envelope stays. | Security | `TestCheckFields`, `TestGetOrgEnvelope_LeavesOutAFieldThatBreaksTheRules` |
+| grant/safe-fields | Links MUST be absolute https (http only for localhost) without credentials; a colour #rrggbb; a host a lower-case DNS name. A proposal breaking a rule MUST be refused, and the public read MUST serve no field of an approved envelope that breaks one (a row seeded by fixture is checked nowhere else): the field is left out, the envelope stays. An approved row without a name (`display_name` blank) MUST be read as no envelope (`found = false`). | Security | `TestCheckFields`, `TestGetOrgEnvelope_LeavesOutAFieldThatBreaksTheRules`, `TestGetOrgEnvelope_ANamelessApprovedRowIsNotFound` |
 
 ## Seeding an approved envelope
 
@@ -93,7 +93,8 @@ plugin is activated in) is a JSON array of rows:
   is held to `grant/safe-fields` (links absolute https, a colour `#rrggbb`, a
   host a lower-case DNS name) when it is written. The public read holds a
   seeded row to the same rules and leaves out any field that breaks one, so a
-  bad link is simply missing from the page — keep to the rules.
+  bad link is simply missing from the page — keep to the rules. A seeded row
+  with a blank `display_name` is read as no envelope at all (`found = false`).
 
 The VALUES are the public contract — what a fixture writes. The handlers
 name them (`StatusApproved`, `ApprovedSlot`, `StatusSuperseded` in

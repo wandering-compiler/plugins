@@ -190,6 +190,12 @@ func (h *GrantServiceHandler) approved(ctx context.Context, orgID string) (*pb.P
 	if err != nil {
 		return nil, err
 	}
+	// A proposal always names the organization (checkFields); a row seeded by
+	// fixture may not. A nameless envelope is none: the page renders neutrally
+	// rather than a co-brand with no name on it.
+	if strings.TrimSpace(e.GetDisplayName()) == "" {
+		return &pb.PublicEnvelope{OrgId: orgID}, nil
+	}
 	return &pb.PublicEnvelope{Found: true, OrgId: orgID, Fields: publicFields(fieldsOf(e))}, nil
 }
 
