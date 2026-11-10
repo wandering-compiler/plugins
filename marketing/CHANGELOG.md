@@ -1,5 +1,59 @@
 # marketing — changelog
 
+## 0.1.0-rc.7
+
+### An activity attribute's name is at most 255 characters
+
+`W17_<SERVICE>_<METHOD>` is cut at 255 characters including the `W17_` prefix; a method name over 251 characters used to make a 259-character name.
+
+### An erased user's late record no longer brings their contact back
+
+A marketing record of a user the plugin holds erased is dropped before anything reaches Brevo, with `brevo_events`, `brevo_attributes` or both; before, a record late in the stream, redelivered or replayed from the dead-letter stream sent an event, and the event re-created the deleted contact (Brevo creates the contact of an unknown `ext_id`). Every path that writes to Brevo — records and auth events alike — also reads the row again after its write and deletes the contact again (and the activity rows) when an erasure landed meanwhile.
+
+### A contact only events created is subscribed by the user's yes
+
+A `Contact` row the plugin creates (`EnsureContact`, `SetContactEmail`) now starts `sent_blacklisted`. Before, a user whose contact existed in Brevo only because events had created it (blacklisted) — an account older than the activation, or one whose `UserCreated` came late — had their first consent `true` recorded as an unsubscribe made in Brevo and was never subscribed. A row created by an earlier version for such a user keeps that recorded unsubscribe; a consent decided after it subscribes as before.
+
+### Events no longer write the consent attribute
+
+An event carries no `contact_properties`. It used to carry the consent attribute as the request saw it (its authentication, cached for minutes), undated and bypassing the `Contact` row, so a record delivered after the user's decision moved the attribute back. The attribute is written only by the consent handler, from the row, with `W17_MARKETING_CONSENT_AT`.
+
+### The sign-up date is no longer lost in the first moments of a fresh account
+
+The consent attribute, `W17_MARKETING_CONSENT_AT` and `W17_SIGNED_UP_AT` are created before the plugin subscribes to auth's events, waiting at most 5 seconds for Brevo at boot. They used to be created in the background, and a sign-up handled before `W17_SIGNED_UP_AT` existed lost its date for good (Brevo drops an attribute the account lacks, silently). The activity attributes are still created in the background.
+
+### The one-time blacklisting pass no longer overrides a consent given meanwhile
+
+A user who consented between the pass's read of the plugin's rows and its blacklisting write stayed blacklisted until a newer decision. The pass now records its blacklisting first, re-reads the row after the write, and subscribes the contact on the newest yes it finds.
+
+### The event's referrer loses its query string; UTM values are bounded
+
+An event's `referrer` is now the referring page's scheme, host and path only: its query string, fragment and user info (which can carry an address or a token from a personalised link) no longer reach Brevo, and a referrer that is no absolute URL is left out. UTM parameter names and values are cut at 200 characters. A Brevo segment that matched on a referrer's query string no longer matches.
+
+### A contact write Brevo refuses is reported
+
+A contact write Brevo refuses for its content (400, 422 — e.g. an address another contact already holds) is still dropped, but now goes to the bundle's error reporter (Sentry and the trace when configured) instead of only the log: the contact then lacks its address or sign-up date. SPEC gap 7 says what is not written again.
+
+### An UNAVAILABLE answered before anything was done is replayed by w17 clients
+
+The w17 SDK no longer replays a handler's `UNAVAILABLE` unless the handler marks it replay-safe (`grpcerr.ReplaySafe`). The plugin marks the ones it answers before the call changed anything (reads, lookups), so a w17 client still retries those; an `UNAVAILABLE` after a write is returned to the caller. Needs the SDK release that has `grpcerr.ReplaySafe`.
+
+### `send: off` still sends what `include` names
+
+Documented: `send: off` sends no method by its kind, but the methods `include` names are still sent. To stop sending altogether, empty `include` too. No behaviour change.
+
+### A failed record no longer resends the rest of its chunk
+
+After Brevo accepted a chunk of events, a failure to record one of them as sent stopped the recording there, and the redelivery sent every later event of the chunk again (up to 199 duplicates). Every event of the chunk is now recorded (each tried 3 times), and only one whose recording still failed is sent again. A dead-letter replay later than the 72 h retention of sent ids still sends its events again (SPEC `brevo/sent-once`).
+
+### A consent event without `decided_at` is ignored
+
+A `MarketingConsentChanged` without `decided_at` used to be dated by its handling, so a redelivered older decision overwrote a newer one. It is now acknowledged and changes nothing. auth always sets `decided_at`; a project that emits the mirror itself must set it too.
+
+### A Brevo unsubscribe dated in the future is dated now
+
+The webhook's `ts_event` (or `date_event`) is no longer trusted past the present: an unsubscribe dated in the future used to be recorded as such, keep every consent decided before that date blacklisted, and reach the `consent_withdrawn` hook with a future `withdrawn_at`.
+
 ## 0.1.0-rc.6
 
 ### Requests reach Brevo as events, as contact attributes, or both
