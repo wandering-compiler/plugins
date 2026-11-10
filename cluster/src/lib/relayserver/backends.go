@@ -72,6 +72,9 @@ type Backends struct {
 	// this to the pool, so a worker attaching promotes whoever is queued
 	// instead of making them wait for the next arrival.
 	onCapacity func(int)
+	// onEngineCapacity is told the per-engine capacity alongside (see
+	// engineCapacityLocked); nil when nothing listens.
+	onEngineCapacity func(any int, byEngine map[string]int)
 
 	// expiryGrace is how long work already running on a tunnel whose
 	// certificate expired may go on before the tunnel is closed under it
@@ -128,8 +131,8 @@ func NewBackends() *Backends {
 // write from a superseded attachment is dropped; ClearProfile forgets it.
 func (b *Backends) SetEngines(fingerprint string, gen uint64, engines []string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if cur, ok := b.engines[fingerprint]; ok && cur.gen > gen {
+		b.mu.Unlock()
 		return
 	}
 	set := engineSet{gen: gen, engines: map[string]bool{}}
@@ -139,6 +142,10 @@ func (b *Backends) SetEngines(fingerprint string, gen uint64, engines []string) 
 		}
 	}
 	b.engines[fingerprint] = set
+	// The per-engine split changed even when the total did not.
+	publish := b.publishLocked()
+	b.mu.Unlock()
+	publish()
 }
 
 // carriesLocked: does the worker run engine? Work that names no engine runs
@@ -190,6 +197,41 @@ func (b *Backends) OnCapacityChange(f func(int)) {
 	if f != nil {
 		f(n)
 	}
+}
+
+// OnEngineCapacityChange registers the sink for per-engine capacity (the
+// pool's SetEngineCapacity) and reports the current value once.
+func (b *Backends) OnEngineCapacityChange(f func(any int, byEngine map[string]int)) {
+	b.mu.Lock()
+	b.onEngineCapacity = f
+	anyN, by := b.engineCapacityLocked()
+	b.mu.Unlock()
+	if f != nil {
+		f(anyN, by)
+	}
+}
+
+// engineCapacityLocked splits capacityLocked by engine: the slots of ready
+// workers that named no engine (they run any), and per engine the slots of
+// ready workers that named it. A worker naming two engines counts for both —
+// the pool's total still caps what it holds at once.
+func (b *Backends) engineCapacityLocked() (int, map[string]int) {
+	anyN, by := 0, map[string]int{}
+	for fp := range b.conns {
+		pr, ok := b.profiles[fp]
+		if !ok || !pr.ready {
+			continue
+		}
+		set, ok := b.engines[fp]
+		if !ok || len(set.engines) == 0 {
+			anyN += int(pr.slots)
+			continue
+		}
+		for e := range set.engines {
+			by[e] += int(pr.slots)
+		}
+	}
+	return anyN, by
 }
 
 // capacityLocked sums what the attached, ready workers can take.
@@ -282,7 +324,7 @@ func (b *Backends) dropRetiredLocked(fingerprint string, be *backend) {
 // capacity 0 with a ready worker attached, and nothing queued ever promoted.
 // Serialised and re-read, the last publish always carries the current total.
 func (b *Backends) publishLocked() func() {
-	if b.onCapacity == nil {
+	if b.onCapacity == nil && b.onEngineCapacity == nil {
 		return func() {}
 	}
 	return func() {
@@ -290,8 +332,17 @@ func (b *Backends) publishLocked() func() {
 		defer b.pubMu.Unlock()
 		b.mu.Lock()
 		n, f := b.capacityLocked(), b.onCapacity
+		anyN, by := b.engineCapacityLocked()
+		fe := b.onEngineCapacity
 		b.mu.Unlock()
-		f(n)
+		// Per engine first: a total that grows promotes at once, and the
+		// engine split must already be there to say for whom.
+		if fe != nil {
+			fe(anyN, by)
+		}
+		if f != nil {
+			f(n)
+		}
 	}
 }
 
@@ -766,7 +817,7 @@ func TicketPicker(pool *relaycore.Pool, backends *Backends, workers *workeradmit
 		if err != nil {
 			// The slot was claimed and there is nobody to run the work, so it
 			// goes back immediately rather than waiting out the call.
-			pool.Done()
+			pool.DoneEngine(engine)
 			return tunnel.Backend{}, refusal.New(codes.Unavailable, refusal.NoWorker,
 				"relay: the ticket was valid but no admitted worker is attached right now")
 		}
@@ -797,7 +848,7 @@ func TicketPicker(pool *relaycore.Pool, backends *Backends, workers *workeradmit
 					// looking permanently busy to take(), so it would stop
 					// being chosen while being perfectly idle.
 					backends.release(fp, gen)
-					pool.Done()
+					pool.DoneEngine(engine)
 				})
 			},
 		}, nil

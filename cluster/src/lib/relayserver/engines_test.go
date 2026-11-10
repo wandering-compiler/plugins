@@ -198,3 +198,29 @@ func TestServer_ReserveTaskRefusesAnEngineNoWorkerRuns(t *testing.T) {
 		t.Fatalf("ReserveTask for the engine the worker runs = %v, %v; want a grant", r, err)
 	}
 }
+
+// The pool hears the fleet's capacity per engine: a worker's slots count for
+// each engine it announced, and a worker naming none counts for any.
+func TestBackends_EngineCapacityFollowsTheFleet(t *testing.T) {
+	b := NewBackends()
+	var anyN int
+	var by map[string]int
+	b.OnEngineCapacityChange(func(a int, m map[string]int) { anyN, by = a, m })
+
+	genBoth := attach(t, b, "both", 2, true)
+	b.SetEngines("both", genBoth, []string{"v0.1.0-rc.73", "v0.2.0-rc.1"})
+	genNew := attach(t, b, "new", 1, true)
+	b.SetEngines("new", genNew, []string{"v0.2.0-rc.1"})
+	attach(t, b, "legacy", 3, true)
+
+	if anyN != 3 {
+		t.Errorf("any = %d, want the 3 slots of the worker naming no engine", anyN)
+	}
+	if by["v0.1.0-rc.73"] != 2 || by["v0.2.0-rc.1"] != 3 {
+		t.Errorf("by engine = %v, want v0.1.0-rc.73:2 v0.2.0-rc.1:3", by)
+	}
+	b.ClearProfile("new", genNew)
+	if by["v0.2.0-rc.1"] != 2 {
+		t.Errorf("after the new-only worker left, v0.2.0-rc.1 = %d, want 2", by["v0.2.0-rc.1"])
+	}
+}

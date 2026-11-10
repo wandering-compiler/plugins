@@ -389,6 +389,11 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 	// out its full complement of tickets and every caller found out at the
 	// proxy.
 	backends.OnCapacityChange(pool.SetCapacity)
+	// And per engine: a worker's slots count for the engines it announced
+	// (AttachReq.engines), so a reservation for one engine waits for a worker
+	// that runs it while reservations for others go ahead — one queue per
+	// engine on the one pool.
+	backends.OnEngineCapacityChange(pool.SetEngineCapacity)
 	// A tunnel whose certificate expired takes no new work; what is running
 	// on it gets as long as a drain would before the tunnel is closed.
 	backends.SetExpiryGrace(cfg.drainTimeout)
