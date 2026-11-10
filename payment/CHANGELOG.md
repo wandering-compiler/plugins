@@ -1,5 +1,45 @@
 # payment — changelog
 
+## 0.1.0-rc.10
+
+### A description or address the row cannot hold is refused before the provider
+
+`CreatePayment` refuses a description longer than 500 characters, and `CreateCustomer` an e-mail that is not an address or is longer than 320 characters, with `InvalidArgument` before the provider is asked. They used to be refused by the local insert after the provider had created the intent or customer, and a retry under the same key failed the same way for ever.
+
+### A refund or a subscribe no longer waits a minute on its own row lock
+
+`RefundPayment` and `Subscribe` write the `Refund` / `Subscription` row inside the transaction that holds the payment's / customer's row lock, so the row's foreign key to the locked row is checked on the lock holder's own connection. Before, the row was written on a second connection, whose foreign-key check (`FOR KEY SHARE` on the parent) waited for that very lock: every first refund and every subscribe on PostgreSQL (and MySQL) stalled until the 60 s transaction timeout rolled the lock back — then answered success with the lock already gone — or failed on the caller's shorter deadline after the provider had refunded or subscribed.
+
+A record that does not commit is now answered `Unavailable` (retry under the same key: the provider's object is found by its metadata key and recorded), not success with a log line, and the work under a row lock is cut off 10 s before the transaction's timeout, so the lock is always released by the handler with the refund it guards recorded or refused.
+
+### A refund without an amount refunds what remains
+
+`RefundPayment` with `amount` 0 refunds what remains of the payment, as the provider's own refund without an amount does. After a partial refund it used to ask for the whole payment and was refused as exceeding what remains; the caller had to compute the rest. With nothing left it is refused (`InvalidArgument`) before the provider is asked.
+
+### An UNAVAILABLE answered before anything was done is replayed by w17 clients
+
+The w17 SDK no longer replays a handler's `UNAVAILABLE` unless the handler marks it replay-safe (`grpcerr.ReplaySafe`). The plugin marks the ones it answers before the call changed anything (reads, lookups), so a w17 client still retries those; an `UNAVAILABLE` after a write is returned to the caller. Needs the SDK release that has `grpcerr.ReplaySafe`.
+
+### Refund and subscribe guards no longer depend on the connection's isolation
+
+The transaction that holds a payment's or a customer's row lock now asks for READ COMMITTED. On a database whose default isolation was REPEATABLE READ, the remaining-amount check of a refund that waited for another refund's lock read a snapshot without that refund, and both could pass.
+
+### Specified: the envelope trust boundary, event commit timing, unconvertible webhook amounts
+
+SPEC only. `payment/principal-from-gateway` and base gap 1 say a request without the gateway envelope is trusted to name any user, so every client-facing surface must stamp it; `payment/events-after-commit` names the storage emit contract it rests on; the new `stripe_webhooks/unconvertible-amount-not-recorded` row says what a webhook amount that does not convert does (never recorded, the delivery fails and is redelivered).
+
+### A copy of a subscription event announces nothing twice
+
+`MarkSubscriptionStatus` refuses an event as old as the one the subscription row already holds unless it changes the status or the period end. A `customer.subscription.*` event delivered again after its ledger write failed, or twice at once, used to rewrite the row and emit `SubscriptionStatusChanged` a second time for one transition. A newer event with the same status still applies (it carries the renewed period end).
+
+### A top-up refund that failed transiently and was never retried
+
+Documented (prepaid gap 2) and proven: `RefundPayment` of a top-up takes the credit before the provider is asked and keeps it taken after a transient provider failure, for the retry. If the caller never retries, the credit stays taken with no refund made until the project's `ReconcileProvider` runs over a window covering the top-up, which gives it back. Run `ReconcileProvider` periodically.
+
+### A success the provider reports without its received amount is not refunded
+
+A refund of a payment whose success webhook has not arrived is refused (`FailedPrecondition`) when the provider reports the payment succeeded but not what it took, as the webhook path refuses the same success. It used to go ahead against the asked amount. Stripe always sends the field; the change matters for drivers and mocks that do not.
+
 ## 0.1.0-rc.9
 
 ### Every amount is an int64 MONEY at scale 4 (read first)
