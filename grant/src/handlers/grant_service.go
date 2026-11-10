@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
 
 	pb "github.com/wandering-compiler/plugins/grant/gen/pb"
@@ -88,6 +89,18 @@ func safeURL(v string) bool {
 	return false
 }
 
+// beforeAnyWrite marks an UNAVAILABLE answered before the call wrote
+// anything (a read) as replay-safe (grpcerr.ReplaySafe): a w17 client then
+// sends the call again, which it does not do for a handler's UNAVAILABLE
+// otherwise — one a write answered may follow the write. Any other error is
+// returned as it is.
+func beforeAnyWrite(err error) error {
+	if status.Code(err) == codes.Unavailable {
+		return grpcerr.ReplaySafe(err)
+	}
+	return err
+}
+
 func invalid(field, why string) error {
 	return status.Errorf(codes.InvalidArgument, "grant: %s: %s", field, why)
 }
@@ -114,7 +127,7 @@ func (h *GrantServiceHandler) ProposeEnvelope(ctx context.Context, req *pb.Propo
 	if _, err := h.Query.GetPendingEnvelope(ctx, &pb.GetPendingEnvelopeReq{OrgId: orgID}); err == nil {
 		return nil, status.Error(codes.FailedPrecondition, "grant: a proposal of this organization is already waiting for a decision; propose again once it is decided")
 	} else if status.Code(err) != codes.NotFound {
-		return nil, err
+		return nil, beforeAnyWrite(err)
 	}
 	resp, err := h.Mutation.InsertEnvelope(ctx, &pb.InsertEnvelopeReq{
 		OrgId: orgID, ProposedBy: caller,
@@ -138,7 +151,7 @@ func (h *GrantServiceHandler) GetMyEnvelopes(ctx context.Context, _ *pb.GetMyEnv
 	}
 	rows, err := h.Query.ListOrgEnvelopes(ctx, &pb.ListOrgEnvelopesReq{OrgId: orgID})
 	if err != nil && status.Code(err) != codes.NotFound {
-		return nil, err
+		return nil, beforeAnyWrite(err)
 	}
 	return versions(rows.GetEnvelopes()), nil
 }
@@ -151,7 +164,7 @@ func (h *GrantServiceHandler) ListEnvelopeProposals(ctx context.Context, _ *pb.L
 	}
 	rows, err := h.Query.ListPendingEnvelopes(ctx, &pb.ListPendingEnvelopesReq{})
 	if err != nil && status.Code(err) != codes.NotFound {
-		return nil, err
+		return nil, beforeAnyWrite(err)
 	}
 	return versions(rows.GetEnvelopes()), nil
 }
@@ -215,7 +228,7 @@ func (h *GrantServiceHandler) approved(ctx context.Context, orgID string) (*pb.P
 		return &pb.PublicEnvelope{OrgId: orgID}, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, beforeAnyWrite(err)
 	}
 	// A proposal always names the organization (checkFields); a row seeded by
 	// fixture may not. A nameless envelope is none: the page renders neutrally

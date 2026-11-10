@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
@@ -328,5 +329,38 @@ func TestProposeEnvelope_OnePendingPerOrganization(t *testing.T) {
 	}
 	if _, err := propose("org-acme", "Acme, fixed"); err != nil {
 		t.Fatalf("a proposal after the first was decided: %v", err)
+	}
+}
+
+// downQuery / downMutation answer every call as a storage that cannot be
+// reached.
+type downQuery struct{ pb.GrantQueryClient }
+
+func (downQuery) GetApprovedEnvelope(context.Context, *pb.GetApprovedEnvelopeReq, ...grpc.CallOption) (*pb.EnvelopeRow, error) {
+	return nil, status.Error(codes.Unavailable, "database unavailable")
+}
+func (downQuery) GetPendingEnvelope(context.Context, *pb.GetPendingEnvelopeReq, ...grpc.CallOption) (*pb.EnvelopeRow, error) {
+	return nil, status.Error(codes.NotFound, "none")
+}
+
+type downMutation struct{ pb.GrantMutationClient }
+
+func (downMutation) InsertEnvelope(context.Context, *pb.InsertEnvelopeReq, ...grpc.CallOption) (*pb.InsertEnvelopeResp, error) {
+	return nil, status.Error(codes.Unavailable, "database unavailable")
+}
+
+// An UNAVAILABLE answered before the call wrote anything — every read — is
+// marked replay-safe, so a w17 client sends it again (the SDK replays a
+// handler's UNAVAILABLE only when so marked). One a write answered is not:
+// the write may have landed.
+func TestUnavailable_ReplaySafeOnlyBeforeAWrite(t *testing.T) {
+	h := &GrantServiceHandler{Query: downQuery{}, Mutation: downMutation{}}
+	_, err := h.GetOrgEnvelope(context.Background(), &pb.GetOrgEnvelopeReq{OrgId: "org-acme"})
+	if status.Code(err) != codes.Unavailable || !grpcerr.IsReplaySafe(err) {
+		t.Errorf("a read: %v (replay-safe %v), want a replay-safe Unavailable", err, grpcerr.IsReplaySafe(err))
+	}
+	_, err = h.ProposeEnvelope(as("admin", "org-acme"), &pb.ProposeEnvelopeReq{Fields: &pb.EnvelopeFields{DisplayName: "Acme"}})
+	if status.Code(err) != codes.Unavailable || grpcerr.IsReplaySafe(err) {
+		t.Errorf("a write: %v (replay-safe %v), want an Unavailable NOT marked replay-safe", err, grpcerr.IsReplaySafe(err))
 	}
 }
