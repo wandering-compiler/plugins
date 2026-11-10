@@ -139,24 +139,21 @@ func TestTheAllowAllLimiterLetsEverythingThrough(t *testing.T) {
 	}
 }
 
-// Every entry point that spends tokens must record. Two of three doing it
-// would make "the caller cannot forget" false — the claim this whole layer
-// rests on — and the two that would have been missed are exactly the ones a
-// consumer reaches for when the answer is long.
-func TestEveryEntryPointRecords(t *testing.T) {
-	src, err := os.ReadFile("agent_stream.go")
-	if err != nil {
+// A stream that completes hands exactly one OK, measured event to the sink:
+// the success half of every-call-recorded on CompleteStream, whose failure
+// half the over-the-wire stream tests cover. (A source scan for the call used
+// to stand here; it stayed green with the record moved into a branch no call
+// reaches.)
+func TestCompleteStream_ACompletedStreamIsRecordedOnce(t *testing.T) {
+	sink := &syncSink{}
+	h := streamHandler([]map[string]any{delta("Hotovo."), completedEvent(10)})
+	h.Usage = sink
+	if err := h.CompleteStream(&pb.CompleteReq{UsageScope: "org-a"}, &recorder{}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(src), "h.recordUsage(") {
-		t.Error("CompleteStream does not record — a stream spends tokens like any other call")
-	}
-	run, err := os.ReadFile("agent_run.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(run), "h.recordUsageFor(") {
-		t.Error("RunAgent does not record — a tool loop is the most expensive shape this plugin offers")
+	evs := sink.all()
+	if len(evs) != 1 || evs[0].Status != OutcomeOK || !evs[0].Measured || evs[0].Scope != "org-a" {
+		t.Fatalf("recorded %+v, want one OK measured row for org-a", evs)
 	}
 }
 
