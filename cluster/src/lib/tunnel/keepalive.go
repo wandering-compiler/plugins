@@ -85,10 +85,11 @@ func ServerKeepalive() []grpc.ServerOption {
 }
 
 // WorkServerOptions are what a server CARRYING WORK is built with — the
-// relay's proxy and the worker's server on its tunnel: keepalive, a bounded
-// HTTP/2 handshake (HandshakeTimeout), and the message cap in both directions.
+// relay's proxy and the worker's server on its tunnel: the panic net
+// (RecoverServerOptions, first), keepalive, a bounded HTTP/2 handshake
+// (HandshakeTimeout), and the message cap in both directions.
 func WorkServerOptions() []grpc.ServerOption {
-	return append(ServerKeepalive(),
+	return append(append(RecoverServerOptions(), ServerKeepalive()...),
 		grpc.ConnectionTimeout(HandshakeTimeout),
 		grpc.MaxRecvMsgSize(MaxMessage),
 		grpc.MaxSendMsgSize(MaxMessage),

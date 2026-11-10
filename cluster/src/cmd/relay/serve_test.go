@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -999,4 +1000,38 @@ func colonPin(fp string) string {
 		b.WriteString(strings.ToUpper(fp[i : i+2]))
 	}
 	return b.String()
+}
+
+// The management and worker-attach servers start from the panic net: a
+// handler that panics is answered Internal and the relay keeps serving.
+func TestBaseServerOptions_RecoverAPanic(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer(baseServerOptions()...)
+	pb.RegisterClusterServiceServer(srv, panickingRelay{})
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	cc, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cc.Close() })
+	for range 2 {
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		_, err := pb.NewClusterServiceClient(cc).RelayStats(ctx, &pb.RelayStatsReq{})
+		cancel()
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("a panicking handler answered %v, want Internal", err)
+		}
+	}
+}
+
+type panickingRelay struct {
+	pb.UnimplementedClusterServiceServer
+}
+
+func (panickingRelay) RelayStats(context.Context, *pb.RelayStatsReq) (*pb.RelayStatsResp, error) {
+	panic("a handler bug")
 }
