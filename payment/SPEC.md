@@ -586,7 +586,7 @@ a fake store proves the handler's sequencing only.
 | ID | MUST hold | Proof |
 |---|---|---|
 | `payment/no-float-money` | No amount is ever a float: int64 `MONEY` at scale 4 on the wire and at rest (`BIGINT`), the currency's integer minor units at the provider boundary, comparison and arithmetic as integers with overflow refused. | `TestToMinorUnits`, `TestFromMinorUnits`, `TestAmountArithmetic` |
-| `payment/amounts-checked-before-provider` | Every amount and currency is validated against the column and the currency's scale before the provider is called, so a provider object is never created for a value the local row cannot hold. | `TestFlow_ChargeAmountAndCurrencyRefusals_NeverReachTheProvider`, `TestFlow_Refund_RefusalsNeverReachTheProvider`, `TestFlow_CreatePlan_Refusals` |
+| `payment/amounts-checked-before-provider` | Every amount and currency is validated against the column and the currency's scale before the provider is called, and so are a charge's description (500 characters) and a customer's address (an address, 320 characters), so a provider object is never created for a value the local row cannot hold. | `TestFlow_ChargeAmountAndCurrencyRefusals_NeverReachTheProvider`, `TestFlow_Refund_RefusalsNeverReachTheProvider`, `TestFlow_CreatePlan_Refusals`, `TestFlow_ColumnRefusalsNeverReachTheProvider` |
 
 #### Idempotency keys
 

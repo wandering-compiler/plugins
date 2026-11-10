@@ -1461,3 +1461,32 @@ func TestFlow_Credit_GrantPastTheAmountRangeIsRefused(t *testing.T) {
 		t.Fatalf("grant to MaxInt64: %v %v", v, err)
 	}
 }
+
+// A value the local row cannot hold is refused before the provider is asked,
+// not by the insert after it: a description past the column's 500 characters
+// (the provider takes 1000) and a customer address that is not one, or past
+// 320 characters. Refused after the provider call, a retry under the same key
+// replayed the same intent and failed the same way for ever, an orphan per key.
+func TestFlow_ColumnRefusalsNeverReachTheProvider(t *testing.T) {
+	r := newRig(t)
+	long := strings.Repeat("é", 501)
+	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 10000, Currency: "usd", IdempotencyKey: "k", Description: long})
+	wantCode(t, err, codes.InvalidArgument, "a description of 501 characters")
+	if n := r.stripe.count("/v1/payment_intents"); n != 0 {
+		t.Errorf("the provider was asked %d time(s) for a description the row cannot hold", n)
+	}
+	if _, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 10000, Currency: "usd", IdempotencyKey: "k2", Description: strings.Repeat("é", 500)}); err != nil {
+		t.Errorf("a description of exactly 500 characters: %v", err)
+	}
+	for _, email := range []string{"not-an-address", strings.Repeat("a", 310) + "@example.com"} {
+		before := r.stripe.count("/v1/customers")
+		_, err := r.h.CreateCustomer(bg, &pb.NewCustomerReq{UserId: "user-b", Email: email})
+		wantCode(t, err, codes.InvalidArgument, "customer email "+email[:10])
+		if n := r.stripe.count("/v1/customers"); n != before {
+			t.Errorf("the provider was asked to create a customer for %q", email[:10])
+		}
+	}
+	if _, err := r.h.CreateCustomer(bg, &pb.NewCustomerReq{UserId: "user-b", Email: "b@example.com"}); err != nil {
+		t.Errorf("a sound address: %v", err)
+	}
+}

@@ -8,11 +8,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/wandering-compiler/sdk/go/lib/typere"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -119,6 +121,11 @@ func (h *PaymentServiceHandler) CreateCustomer(ctx context.Context, req *pb.NewC
 // or a racing twin within its window instead of a second, unreferenced one;
 // a different address is a different create, and a different key.
 func (h *PaymentServiceHandler) createCustomer(ctx context.Context, userID, email string) (*pb.Customer, error) {
+	// The address the row will hold is checked before the provider customer
+	// exists, not by the insert after it.
+	if email != "" && (utf8.RuneCountInString(email) > maxEmail || !typere.ValidEmail(email)) {
+		return nil, invalidArg("email is not an address the customer can be recorded with")
+	}
 	install := h.installID()
 	providerID, err := h.Backend.EnsureCustomer(ctx, backend.CustomerSpec{
 		UserID: userID, Email: email, Install: install,
@@ -174,6 +181,12 @@ func (h *PaymentServiceHandler) CreatePayment(ctx context.Context, req *pb.Charg
 	if err := idempotencyKeyTooLong(req.GetIdempotencyKey()); err != nil {
 		return nil, err
 	}
+	// Checked here, not by the insert after the provider call: refused there,
+	// the intent already existed and a retry under the key replayed it and
+	// failed the same way, for ever.
+	if utf8.RuneCountInString(req.GetDescription()) > maxDescription {
+		return nil, invalidArg(fmt.Sprintf("description is longer than %d characters", maxDescription))
+	}
 
 	cust, err := h.resolveCustomer(ctx, req.GetUserId())
 	if err != nil {
@@ -185,6 +198,13 @@ func (h *PaymentServiceHandler) CreatePayment(ctx context.Context, req *pb.Charg
 	}
 	return &pb.ChargeResp{Payment: payment, ClientSecret: clientSecret}, nil
 }
+
+// maxDescription and maxEmail are the max_len of Payment.description and
+// Customer.email (proto/types/models.proto), in characters.
+const (
+	maxDescription = 500
+	maxEmail       = 320
+)
 
 // chargeCurrency normalises a request currency, falling back to the
 // configured default, and refuses anything that is not a 3-letter code.
