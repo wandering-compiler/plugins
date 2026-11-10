@@ -1181,12 +1181,16 @@ service PaymentMutation {
   // to ACTIVE, nor emit SubscriptionStatusChanged for a revival that
   // did not happen.
   //
-  // The guard is deliberately terminal-state only, NOT `status <>
-  // :status`: a same-status delivery still carries a fresh
-  // current_period_end (the renewal boundary), and refusing it would
-  // drop the one field the event exists to refresh. Two same-status
-  // deliveries racing are last-writer-wins on a value both took from
-  // the provider, which every serial order also produces.
+  // ORDERED by the provider's event time: an event older than the one the
+  // row holds is refused (out-of-order delivery), and one as old — a copy
+  // of the event the row already holds, redelivered after its ledger
+  // write failed or delivered twice at once — is refused unless it
+  // changes something (status, or current_period_end). So a copy changes
+  // nothing and emits nothing a second time; the guarantee is this guard's,
+  // not the processed-events ledger's. A same-status event that is newer
+  // still applies: it carries a fresh current_period_end (the renewal
+  // boundary), and its time must be recorded so an older event arriving
+  // after it is refused.
   rpc MarkSubscriptionStatus(MarkSubscriptionStatusReq) returns (MarkSubscriptionStatusResp) {
     option (w17.contrib.plugin_feature_rpc) = "subscriptions";
     option (w17.db.method) = {
@@ -1199,7 +1203,9 @@ service PaymentMutation {
           "provider_event_at = :provider_event_at, "
           "updated_at = NOW() "
           "WHERE provider_subscription_id = :provider_subscription_id AND status <> 4 "
-          "AND (provider_event_at IS NULL OR provider_event_at <= :provider_event_at) "
+          "AND (provider_event_at IS NULL OR provider_event_at < :provider_event_at "
+          "     OR (provider_event_at = :provider_event_at "
+          "         AND (status <> :status OR current_period_end IS DISTINCT FROM :current_period_end))) "
           "RETURNING id AS subscription.id, "
           "          provider_subscription_id AS subscription.provider_subscription_id, "
           "          status AS subscription.status, "
