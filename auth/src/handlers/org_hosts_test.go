@@ -23,14 +23,15 @@ type hostMock struct {
 	ended []string
 
 	// org_signup (org_signup_test.go)
-	policies    map[string][]*pb.OrgSignUpPolicyRow // org → live policies
-	roles       []*pb.OrgRoleRow                    // the org-role catalogue
-	joined      []string                            // AddOrgMembership: user/org/kind/role
-	granted     []string                            // AssignRoleToUser: user/org/role id
-	policySet   []string                            // SetOrgSignUpPolicyRow: org/kind/open/role
-	policySnap  []string                            // SetOrgSignUpPolicyRow: the role snapshot stored
-	policyEnded []string                            // EndOrgSignUpPolicyRow: org/kind
-	roleGrants  []*pb.RoleGrant                     // ListRoleGrants: what each role carries (the ceiling)
+	policies     map[string][]*pb.OrgSignUpPolicyRow // org → live policies
+	roles        []*pb.OrgRoleRow                    // the org-role catalogue
+	joined       []string                            // AddOrgMembership: user/org/kind/role
+	granted      []string                            // AssignRoleToUser: user/org/role id
+	policySet    []string                            // SetOrgSignUpPolicyRow: org/kind/open/role
+	policySnap   []string                            // SetOrgSignUpPolicyRow: the role snapshot stored
+	policyPinned []string                            // PinOrgSignUpPolicySnapshotRow: org/kind/snapshot
+	policyEnded  []string                            // EndOrgSignUpPolicyRow: org/kind
+	roleGrants   []*pb.RoleGrant                     // ListRoleGrants: what each role carries (the ceiling)
 }
 
 // GetUserRealmWidePermissions: nobody here holds a role realm-wide.

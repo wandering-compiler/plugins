@@ -181,11 +181,17 @@ func hostIsBound(ctx context.Context, h *AuthServiceHandler, host string) (bool,
 // policy stored when its operator was checked against the role ceiling, as an
 // invitation's acceptance is (checkRoleWithinSnapshot): a role widened since,
 // or another role now answering to the name, refuses the registration
-// (SIGNUP_POLICY_STALE) and nothing is written. So does an open policy with
-// no snapshot — one set before the snapshot was stored, never checked — and
-// a registration whose kind is no longer open (a confirmation parked while
-// the policy was closed or replaced with another role): the policy that
-// would grant the role is the live one, and it must be the one checked.
+// (SIGNUP_POLICY_STALE) and nothing is written. So does a registration whose
+// kind is no longer open (a confirmation parked while the policy was closed
+// or replaced with another role): the policy that would grant the role is
+// the live one, and it must be the one checked.
+//
+// An open policy with no snapshot — seeded by fixtures, or set before the
+// snapshot was stored — was never held to an operator's ceiling (fixtures
+// are the project's own, and a policy from before kept the meaning it had).
+// Its first registration pins the role as it reads then
+// (PinOrgSignUpPolicySnapshotRow, under the same lock), so a role widened
+// after that refuses the registrations that follow, as for any other policy.
 func writeSignUpJoin(txCtx context.Context, h *AuthServiceHandler, userID string, j *orgJoin) error {
 	// Under the organization's lock, as every grant there is: the role is
 	// resolved and granted with no edit or retirement of it in between.
@@ -224,10 +230,20 @@ func checkSignUpPolicyRole(txCtx context.Context, h *AuthServiceHandler, j *orgJ
 	if err != nil && status.Code(err) != codes.NotFound {
 		return err
 	}
-	snapshot := ""
+	snapshot, live := "", false
 	for _, p := range policies.GetPolicies() {
 		if p.GetKind() == j.kind && p.GetOpen() {
-			snapshot = p.GetRoleSnapshot()
+			snapshot, live = p.GetRoleSnapshot(), true
+		}
+	}
+	if live && snapshot == "" {
+		if snapshot, err = h.roleSnapshotNow(txCtx, roleID); err != nil {
+			return err
+		}
+		if _, err := h.Mutation.PinOrgSignUpPolicySnapshotRow(txCtx, &pb.PinOrgSignUpPolicySnapshotRowReq{
+			OrgId: j.orgID, Kind: j.kind, RoleSnapshot: snapshot,
+		}); err != nil && status.Code(err) != codes.NotFound {
+			return err
 		}
 	}
 	within, err := h.roleWithinSnapshot(txCtx, roleID, snapshot)
@@ -236,7 +252,7 @@ func checkSignUpPolicyRole(txCtx context.Context, h *AuthServiceHandler, j *orgJ
 	}
 	if !within {
 		return refusal(txCtx, codes.FailedPrecondition,
-			"org_signup: the open policy's role is not the one its operator was checked against (widened, another role under the name, or a policy set before the check was stored) — set the policy again",
+			"org_signup: the open policy's role is not the one it was pinned to (widened, or another role under the name), or the kind is no longer open — set the policy again",
 			CodeSignUpPolicyStale, "", MsgSignUpPolicyStale, nil)
 	}
 	return nil

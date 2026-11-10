@@ -56,6 +56,16 @@ func (m *hostMock) SetOrgSignUpPolicyRow(_ context.Context, in *pb.SetOrgSignUpP
 	return &pb.SetOrgSignUpPolicyRowResp{}, nil
 }
 
+func (m *hostMock) PinOrgSignUpPolicySnapshotRow(_ context.Context, in *pb.PinOrgSignUpPolicySnapshotRowReq, _ ...grpc.CallOption) (*pb.PinOrgSignUpPolicySnapshotRowResp, error) {
+	m.policyPinned = append(m.policyPinned, in.GetOrgId()+"/"+in.GetKind()+"/"+in.GetRoleSnapshot())
+	for _, p := range m.policies[in.GetOrgId()] {
+		if p.GetKind() == in.GetKind() && p.GetOpen() && p.GetRoleSnapshot() == "" {
+			p.RoleSnapshot = in.GetRoleSnapshot()
+		}
+	}
+	return &pb.PinOrgSignUpPolicySnapshotRowResp{}, nil
+}
+
 func (m *hostMock) EndOrgSignUpPolicyRow(_ context.Context, in *pb.EndOrgSignUpPolicyRowReq, _ ...grpc.CallOption) (*pb.EndOrgSignUpPolicyRowResp, error) {
 	m.policyEnded = append(m.policyEnded, in.GetOrgId()+"/"+in.GetKind())
 	return nil, status.Error(codes.NotFound, "no rows")
@@ -302,9 +312,6 @@ func TestWriteSignUpJoin_HoldsTheRoleToThePolicysSnapshot(t *testing.T) {
 		{"another role answers to the name", func(m *hostMock) {
 			m.policies["org-acme"][0].RoleSnapshot = "role-old-member:3"
 		}},
-		{"a policy set before snapshots were stored", func(m *hostMock) {
-			m.policies["org-acme"][0].RoleSnapshot = ""
-		}},
 		{"the policy was closed since the registration was requested", func(m *hostMock) {
 			m.policies["org-acme"][0] = &pb.OrgSignUpPolicyRow{Kind: "client", Open: false}
 		}},
@@ -330,6 +337,32 @@ func TestWriteSignUpJoin_HoldsTheRoleToThePolicysSnapshot(t *testing.T) {
 		}
 		if !slices.Equal(m.granted, []string{"u-new/org-acme/role-member"}) {
 			t.Errorf("granted %v", m.granted)
+		}
+	})
+	// A policy without a snapshot — seeded by fixtures, or set before the
+	// snapshot was stored — was never checked against an operator's ceiling;
+	// its first registration pins the role as it reads then, and the role is
+	// held to that from the next registration on.
+	t.Run("a policy without a snapshot is pinned by its first registration", func(t *testing.T) {
+		m := signupFixture()
+		m.policies["org-acme"][0].RoleSnapshot = ""
+		h := &AuthServiceHandler{Query: m, Mutation: m, Lock: signupPolicyLock()}
+		if err := writeSignUpJoin(context.Background(), h, "u-first", join); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(m.policyPinned, []string{"org-acme/client/role-member:3"}) {
+			t.Errorf("pinned %v, want the role as it read at the first registration", m.policyPinned)
+		}
+		if !slices.Equal(m.granted, []string{"u-first/org-acme/role-member"}) {
+			t.Errorf("granted %v", m.granted)
+		}
+		m.roleGrants[0] = &pb.RoleGrant{RoleId: "role-member", PermissionIds: []int32{3, 4}}
+		err := writeSignUpJoin(context.Background(), h, "u-second", join)
+		if status.Code(err) != codes.FailedPrecondition || refusalCodeOf(err) != CodeSignUpPolicyStale {
+			t.Errorf("after the role widened: err = %v, want FailedPrecondition %s", err, CodeSignUpPolicyStale)
+		}
+		if len(m.granted) != 1 || len(m.policyPinned) != 1 {
+			t.Errorf("a refused registration wrote: granted %v, pinned %v", m.granted, m.policyPinned)
 		}
 	})
 	t.Run("a wildcard that is still one", func(t *testing.T) {

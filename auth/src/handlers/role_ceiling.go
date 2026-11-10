@@ -198,6 +198,12 @@ func (h *AuthServiceHandler) checkMayGrantRole(ctx context.Context, roleID strin
 		return "", refusal(ctx, codes.PermissionDenied, errRoleAboveCaller.Error(),
 			CodeRoleAboveCaller, "role", MsgRoleAboveCaller, nil)
 	}
+	return h.roleSnapshotNow(ctx, roleID)
+}
+
+// roleSnapshotNow is the role's snapshot as it reads now: what it carries
+// from the deployed lock, or the wildcard marker.
+func (h *AuthServiceHandler) roleSnapshotNow(ctx context.Context, roleID string) (string, error) {
 	grants, err := h.roleGrants(ctx)
 	if err != nil {
 		return "", err
