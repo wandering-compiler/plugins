@@ -352,3 +352,38 @@ func TestGetScopeLimit_TwoLimitsWithOneStartAnswerTheLastSet(t *testing.T) {
 		t.Errorf("GetScopeLimit has no deterministic tie-break on valid_from:\n%s", body)
 	}
 }
+
+// usage_persistence/unpriced-is-absent: a row is unpriced only when a kind it
+// USED has no rate. A price that leaves a kind NULL ("not priced for this
+// model", e.g. a model with no cache) must still price a row that spent none
+// of that kind — `0 * NULL` is NULL in SQL, so pricing every kind
+// unconditionally made such a row unpriced, and the limiter then refused every
+// call of a capped scope (reasonUnpriced). Each kind is priced
+// `CASE WHEN <tokens> = 0 THEN 0 ELSE <tokens> * <rate> END`, in both spend
+// queries. Ran against PostgreSQL (SPEC: "How to prove it", item 3).
+func TestSpendQueries_PriceOnlyTheKindsARowUsed(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "proto", "queries", "usage_query.proto"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	for _, rpc := range []string{"rpc GetScopeSpend(", "rpc GetLabelSpend("} {
+		i := strings.Index(s, rpc)
+		if i < 0 {
+			t.Fatalf("%s not found", rpc)
+		}
+		body := s[i:]
+		if j := strings.Index(body, "\n  }\n"); j > 0 {
+			body = body[:j]
+		}
+		for _, want := range []string{
+			`"  SELECT ((CASE WHEN u.input_tokens - u.cached_input_tokens = 0 THEN 0 ELSE (u.input_tokens - u.cached_input_tokens) * pr.input_per_million_minor END) "`,
+			`"          + (CASE WHEN u.cached_input_tokens = 0 THEN 0 ELSE u.cached_input_tokens * pr.cached_input_per_million_minor END) "`,
+			`"          + (CASE WHEN u.output_tokens = 0 THEN 0 ELSE u.output_tokens * pr.output_per_million_minor END)) / 1000000.0 AS line_minor, "`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s does not price a kind only when the row used it — missing %s", rpc, want)
+			}
+		}
+	}
+}

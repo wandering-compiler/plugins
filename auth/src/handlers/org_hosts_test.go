@@ -29,6 +29,7 @@ type hostMock struct {
 	granted     []string                            // AssignRoleToUser: user/org/role id
 	policySet   []string                            // SetOrgSignUpPolicyRow: org/kind/open/role
 	policyEnded []string                            // EndOrgSignUpPolicyRow: org/kind
+	roleGrants  []*pb.RoleGrant                     // ListRoleGrants: what each role carries (the ceiling)
 }
 
 // GetUserRealmWidePermissions: nobody here holds a role realm-wide.

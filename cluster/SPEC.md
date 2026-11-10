@@ -278,17 +278,23 @@ which.
 | `base/proxy-opaque-payload` | The proxy MUST forward frames without decoding them, preserving order, half-close, caller cancellation and the worker's status, message and reason. | Consistency & concurrency | `TestHandler_AUnaryCallRoundTripsWithItsMetadata`, `TestHandler_AServerStreamArrivesInOrder`, `TestHandler_TheCallersCloseSendReachesTheWorker`, `TestHandler_CallerCancellationReachesTheWorker`, `TestHandler_AWorkerErrorKeepsItsCodeMessageAndReason`, `TestHandler_APickerRefusalReachesTheCallerAsIs` |
 | `base/message-cap` | Every hop MUST cap a single message at `MaxMessage` (256 MiB) in both directions; a message under the cap but above gRPC's default MUST cross. | Performance | `TestHandler_AMessageOverTheDefaultCapCrosses`, `TestTunnel_AMessageOverTheDefaultCapCrossesBothWays` |
 | `base/no-worker-returns-slot` | A redeemed ticket with no admitted ready worker to run it MUST be refused (`NO_WORKER`) and its slot returned at once. A worker whose tunnel fails to open the call MUST be reported `WORKER_LOST` and its slot returned. | Failure & configuration | `TestTicketPicker_NoWorkerReturnsTheSlot`, `TestHandler_ADeadBackendIsWorkerLostAndReleased` |
+| `base/proxy-strips-gateway-owned` | The proxy MUST NOT forward a key only a gateway may write (`principal.IsEdgeReservedKey`: `x-w17-*` — the identity envelope and scopes —, `w17-label-*`, `w17-tx-id`, `w17-conn-id`, and their grpc-gateway spellings `grpcgateway-*` / `grpc-metadata-*`), whatever its case: the callers port is an edge (any principal the ACL lets reserve holds a ticket), and a worker built from the SDK pieces that read those keys believes them only because every edge strips a client's copy. Every other header of the caller MUST travel unchanged. A worker MUST still treat the caller's remaining metadata as the caller's word, not as a verified identity. | Security | `TestHandler_GatewayOwnedKeysStopAtTheRelay`, `TestHandler_TheKeysThePickerConsumedStopAtTheRelay` |
 | `base/no-automatic-redelivery` | Neither the relay nor the control plane MUST re-run a call on another worker after it was handed to one. A retry is a new placement by the caller. | Consistency & concurrency | `TestHandler_ADeadBackendIsWorkerLostAndReleased` (no retry on the proxy), `TestScheduleTask_DoesNotRetryAfterARelayHasAnswered` |
 
 **Gaps / suspected defects**
 
-1. **Fixed in part: the spent ticket stops at the relay.** The picker names
-   the headers it consumed (`tunnel.Backend.Consumed`) and the proxy removes
-   them before forwarding (`TestHandler_TheKeysThePickerConsumedStopAtTheRelay`,
-   `TestTunnel_ACallReachesTheWorkerAndComesBack`). Every other header still reaches the
-   worker, an authorization header the caller sent included: a caller must
-   not send a machine the deploy enrolled credentials meant for another
-   service. Stated in `proxy.go`; whether the proxy should strip more is open.
+1. **Fixed: the spent ticket and every gateway-owned key stop at the relay.**
+   The picker names the headers it consumed (`tunnel.Backend.Consumed`) and
+   the proxy removes them before forwarding
+   (`TestHandler_TheKeysThePickerConsumedStopAtTheRelay`,
+   `TestTunnel_ACallReachesTheWorkerAndComesBack`). It also removes every key
+   only a gateway may write (`base/proxy-strips-gateway-owned`): a ticket
+   holder could send `x-w17-user`, `x-w17-scope-org_id`,
+   `w17-label-account_kind` or `w17-tx-id` and the worker received them as
+   if a gateway had. Every other header still reaches the worker, an
+   authorization header the caller sent included: a caller must not send a
+   machine the deploy enrolled credentials meant for another service, and a
+   worker must not read a principal from what remains.
 2. **No connection limit on the callers port.** It is the only port the deploy
    block publishes. TLS handshakes are bounded at 20 s, but nothing limits
    concurrent unauthenticated connections or failed ticket attempts per

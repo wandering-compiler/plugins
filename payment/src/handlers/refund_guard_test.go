@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
@@ -51,6 +54,43 @@ func (l *rowLocks) acquire(ctx context.Context, tx, id string) error {
 	}
 }
 
+// fkLockTimeout is how long keyShare waits before it gives up, the way a
+// database's lock_timeout ends the wait. Short: the waits it models end in
+// milliseconds when the holder is another call, and never when the holder is
+// the inserting call itself.
+const fkLockTimeout = 2 * time.Second
+
+// keyShare models the foreign-key check of an INSERT naming parent id
+// (Refund.payment_id, Subscription.customer_id, Payment.customer_id,
+// Dispute.payment_id): the database takes FOR KEY SHARE on the parent row,
+// which conflicts with the FOR UPDATE a row lock holds. An insert made inside
+// the transaction that holds the lock (a ctx carrying its w17-tx-id) passes;
+// one made on another connection waits until the holder ends — or, past
+// fkLockTimeout, fails as a lock timeout. A handler that holds a row lock and
+// inserts a child of that row on its own ctx waits on itself.
+func (l *rowLocks) keyShare(ctx context.Context, id string) error {
+	tx := txOf(ctx)
+	timeout := time.NewTimer(fkLockTimeout)
+	defer timeout.Stop()
+	for {
+		l.mu.Lock()
+		ch, busy := l.held[id]
+		if !busy || l.owner[id] == tx {
+			l.mu.Unlock()
+			return nil
+		}
+		holder := l.owner[id]
+		l.mu.Unlock()
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout.C:
+			return status.Errorf(codes.Unavailable, "lock timeout: the foreign-key check on %s waits for the row lock transaction %s holds", id, holder)
+		}
+	}
+}
+
 func (l *rowLocks) release(tx string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -79,6 +119,7 @@ func txOf(ctx context.Context) string {
 // LockPaymentForRefund reads the row; inside a transaction it locks it first,
 // as the generated FOR-UPDATE variant does.
 func (s *memStore) LockPaymentForRefund(ctx context.Context, in *pb.LockPaymentForRefundReq, _ ...grpc.CallOption) (*pb.LockPaymentForRefundResp, error) {
+	s.runHook("acquire:LockPaymentForRefund")
 	if tx := txOf(ctx); tx != "" {
 		if err := s.locks.acquire(ctx, tx, in.GetId()); err != nil {
 			return nil, err
@@ -96,6 +137,19 @@ func (s *memStore) LockPaymentForRefund(ctx context.Context, in *pb.LockPaymentF
 		s.leave("LockPaymentForRefund", nil)
 }
 
+// runHook runs (once) the onceBefore hook registered under name: a point in a
+// call that enter's hook cannot reach — before a row lock is taken, where a
+// concurrent request that held the lock first has already committed.
+func (s *memStore) runHook(name string) {
+	s.mu.Lock()
+	fn := s.before[name]
+	delete(s.before, name)
+	s.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 // fakeDistTx is the coordinator: Begin hands out ids, Commit and Rollback end
 // the transaction and release its row locks.
 type fakeDistTx struct {
@@ -104,6 +158,8 @@ type fakeDistTx struct {
 	n     int
 	begun int
 	ended map[string]string // tx id → "commit" | "rollback"
+	// commitErr fails the next Commit (the transaction is gone either way).
+	commitErr error
 }
 
 func (d *fakeDistTx) Begin(context.Context, *distxpb.BeginRequest, ...grpc.CallOption) (*distxpb.BeginResponse, error) {
@@ -127,6 +183,14 @@ func (d *fakeDistTx) end(tx, how string) {
 }
 
 func (d *fakeDistTx) Commit(_ context.Context, in *distxpb.CommitRequest, _ ...grpc.CallOption) (*distxpb.CommitResponse, error) {
+	d.mu.Lock()
+	err := d.commitErr
+	d.commitErr = nil
+	d.mu.Unlock()
+	if err != nil {
+		d.end(in.GetTxId(), "rollback")
+		return nil, err
+	}
 	d.end(in.GetTxId(), "commit")
 	return &distxpb.CommitResponse{}, nil
 }

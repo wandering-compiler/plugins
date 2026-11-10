@@ -1,0 +1,5 @@
+### A refund or a subscribe no longer waits a minute on its own row lock
+
+`RefundPayment` and `Subscribe` write the `Refund` / `Subscription` row inside the transaction that holds the payment's / customer's row lock, so the row's foreign key to the locked row is checked on the lock holder's own connection. Before, the row was written on a second connection, whose foreign-key check (`FOR KEY SHARE` on the parent) waited for that very lock: every first refund and every subscribe on PostgreSQL (and MySQL) stalled until the 60 s transaction timeout rolled the lock back — then answered success with the lock already gone — or failed on the caller's shorter deadline after the provider had refunded or subscribed.
+
+A record that does not commit is now answered `Unavailable` (retry under the same key: the provider's object is found by its metadata key and recorded), not success with a log line, and the work under a row lock is cut off 10 s before the transaction's timeout, so the lock is always released by the handler with the refund it guards recorded or refused.

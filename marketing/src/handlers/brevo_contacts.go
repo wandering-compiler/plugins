@@ -164,10 +164,16 @@ func (t *brevoTool) followAddress(ctx context.Context, what, user, email string,
 		return nil
 	}
 	if !st.blacklisted() {
-		return t.contactCall(what, user, t.writeLeavingBlacklisted(ctx, user, email, attrs))
+		if err := t.contactCall(what, user, t.writeLeavingBlacklisted(ctx, user, email, attrs)); err != nil {
+			return err
+		}
+		return t.undoForErased(ctx, user)
 	}
 	if err := t.writeBlacklisted(ctx, user, email, attrs); err != nil {
-		return t.contactCall(what, user, err)
+		if err := t.contactCall(what, user, err); err != nil {
+			return err
+		}
+		return t.undoForErased(ctx, user)
 	}
 	// A yes may have landed while this wrote: blacklisting over it would
 	// leave a consented contact blacklisted. The row as stored now decides;
@@ -177,10 +183,16 @@ func (t *brevoTool) followAddress(ctx context.Context, what, user, email string,
 	if err != nil {
 		return err
 	}
-	if now.erasedAt != nil || now.blacklisted() {
+	if now.erasedAt != nil {
+		return t.undoForErased(ctx, user)
+	}
+	if now.blacklisted() {
 		return nil
 	}
-	return t.contactCall(what, user, t.subscribe(ctx, user, merged(attrs, t.consentAttrs(now)), now, *now.consentAt, true))
+	if err := t.contactCall(what, user, t.subscribe(ctx, user, merged(attrs, t.consentAttrs(now)), now, *now.consentAt, true)); err != nil {
+		return err
+	}
+	return t.undoForErased(ctx, user)
 }
 
 // writeBlacklisted writes the contact blacklisted (created when Brevo has
@@ -310,14 +322,20 @@ func (t *brevoTool) onConsentChanged(ctx context.Context, ev *pb.AuthMarketingCo
 	}
 	attrs := t.consentAttrs(st)
 	newest := st.consentAt.Equal(at) && st.consent == ev.GetConsent()
+	var werr error
 	switch {
 	case st.blacklisted():
-		return t.contactCall("set the consent of", user, t.writeBlacklisted(ctx, user, "", attrs))
+		werr = t.writeBlacklisted(ctx, user, "", attrs)
 	case !newest:
 		// A yes is kept, but this delivery is not it: it decides nothing.
-		return t.contactCall("set the consent of", user, t.writeLeavingBlacklisted(ctx, user, "", attrs))
+		werr = t.writeLeavingBlacklisted(ctx, user, "", attrs)
+	default:
+		werr = t.subscribe(ctx, user, attrs, st, at, false)
 	}
-	return t.contactCall("set the consent of", user, t.subscribe(ctx, user, attrs, st, at, false))
+	if err := t.contactCall("set the consent of", user, werr); err != nil {
+		return err
+	}
+	return t.undoForErased(ctx, user)
 }
 
 // subscribe acts on the newest decision, a yes. Brevo is read first: a
@@ -372,6 +390,51 @@ func (t *brevoTool) subscribe(ctx context.Context, user string, attrs map[string
 	}
 	if now.erasedAt == nil && now.blacklisted() {
 		return t.writeBlacklisted(ctx, user, "", t.consentAttrs(now))
+	}
+	return nil
+}
+
+// erasedOf reports which of users were erased: a late record of theirs writes
+// nothing.
+func (t *brevoTool) erasedOf(ctx context.Context, users []string) (map[string]bool, error) {
+	resp, err := t.query.ListContacts(ctx, &pb.ListContactsReq{UserIds: users})
+	if err != nil {
+		return nil, fmt.Errorf("marketing plugin: reading the contacts of %d users: %w", len(users), err)
+	}
+	out := map[string]bool{}
+	for _, c := range resp.GetContacts() {
+		if c.GetErasedAt() != nil {
+			out[c.GetUserId()] = true
+		}
+	}
+	return out, nil
+}
+
+// undoForErased deletes again, in Brevo, the contact of every one of users
+// the plugin now holds erased (and, with brevo_attributes, forgets what they
+// did): an erasure that landed while this call wrote to Brevo. Called after
+// the write, it closes the window between the erasure check before the write
+// and the write itself — UserDeleted records the erasure before it deletes
+// the contact, so either this read sees the erasure, or the erasure's delete
+// comes after this call's write.
+func (t *brevoTool) undoForErased(ctx context.Context, users ...string) error {
+	erased, err := t.erasedOf(ctx, users)
+	if err != nil {
+		return err
+	}
+	for _, u := range users {
+		if !erased[u] {
+			continue
+		}
+		log.Printf("marketing plugin: user %s was erased while their contact was written; deleting it again", u)
+		if t.attributes && eraseActivity != nil {
+			if err := eraseActivity(t, ctx, u); err != nil {
+				return err
+			}
+		}
+		if err := t.contactCall("delete the contact of", u, t.client.DeleteContact(ctx, u)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

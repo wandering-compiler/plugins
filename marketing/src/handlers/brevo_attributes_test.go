@@ -143,6 +143,20 @@ func TestActivity_AFailureSendsNoEventAndIsRedelivered(t *testing.T) {
 	}
 }
 
+// brevo_attributes/transient-is-redelivered: a failure of the Activity table
+// fails the batch before anything reaches Brevo, and records nothing as sent.
+func TestActivity_ATableFailureWritesNothing(t *testing.T) {
+	f := &fakeBrevo{known: map[string]bool{"u1": true}}
+	l := &ledger{sent: map[string]bool{}, writeErr: errors.New("db down")}
+	err := attrTool(t, f, l, true).ConsumeMarketing(context.Background(), batch(recordAt(1, createTask, "u1", monday)))
+	if err == nil {
+		t.Fatal("a table failure was swallowed")
+	}
+	if len(f.batches)+len(f.updates)+len(f.upserts) != 0 || len(l.sent) != 0 {
+		t.Errorf("Brevo was written on a table failure: batches=%v updates=%v upserts=%v", f.batches, f.updates, f.upserts)
+	}
+}
+
 // brevo_attributes/selection: only what send / include / exclude let through
 // moves an attribute.
 func TestActivity_FollowsTheSelection(t *testing.T) {

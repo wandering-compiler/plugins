@@ -67,6 +67,8 @@ type memStore struct {
 	failBefore map[string][]error // returned BEFORE the op (nothing applied)
 	failAfter  map[string][]error // returned AFTER the op committed (lost response)
 	before     map[string]func()  // runs (unlocked) before the op, once
+	everyEnter map[string]func()  // runs (unlocked) before every call of the op
+	everyLeave map[string]func()  // runs (locked) when every call of the op has done its work
 	calls      map[string]int
 
 	// locks models LockPaymentForRefund's row lock (refund_guard_test.go).
@@ -116,15 +118,40 @@ func (s *memStore) onceBefore(method string, fn func()) {
 	s.before[method] = fn
 }
 
+// everyBefore runs fn (without the store lock) before every call of method.
+func (s *memStore) everyBefore(method string, fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.everyEnter == nil {
+		s.everyEnter = map[string]func(){}
+	}
+	s.everyEnter[method] = fn
+}
+
+// everyAfter runs fn (under the store lock; it must not call the store) when
+// every call of method has done its work, before it returns.
+func (s *memStore) everyAfter(method string, fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.everyLeave == nil {
+		s.everyLeave = map[string]func(){}
+	}
+	s.everyLeave[method] = fn
+}
+
 // enter records the call and runs any one-shot hook, then takes the
 // lock; the returned error (if any) is an injected pre-failure.
 func (s *memStore) enter(method string) error {
 	s.mu.Lock()
 	fn := s.before[method]
 	delete(s.before, method)
+	every := s.everyEnter[method]
 	s.mu.Unlock()
 	if fn != nil {
 		fn()
+	}
+	if every != nil {
+		every()
 	}
 	s.mu.Lock()
 	s.calls[method]++
@@ -139,6 +166,9 @@ func (s *memStore) enter(method string) error {
 // post-commit failure when one is queued and the op succeeded.
 func (s *memStore) leave(method string, err error) error {
 	defer s.mu.Unlock()
+	if fn := s.everyLeave[method]; fn != nil {
+		fn()
+	}
 	if err == nil {
 		if errs := s.failAfter[method]; len(errs) > 0 {
 			s.failAfter[method] = errs[1:]
@@ -491,7 +521,10 @@ func (s *memStore) CreateCustomer(_ context.Context, in *pb.CreateCustomerReq, _
 	return &pb.CreateCustomerResp{Customer: clone(c)}, s.leave("CreateCustomer", nil)
 }
 
-func (s *memStore) CreatePayment(_ context.Context, in *pb.CreatePaymentReq, _ ...grpc.CallOption) (*pb.CreatePaymentResp, error) {
+func (s *memStore) CreatePayment(ctx context.Context, in *pb.CreatePaymentReq, _ ...grpc.CallOption) (*pb.CreatePaymentResp, error) {
+	if err := s.locks.keyShare(ctx, in.GetCustomerId()); err != nil {
+		return nil, err
+	}
 	if err := s.enter("CreatePayment"); err != nil {
 		return nil, s.leave("", err)
 	}
@@ -645,7 +678,10 @@ func (s *memStore) SumRefundsForPayment(_ context.Context, in *pb.SumRefundsForP
 	return &pb.SumRefundsForPaymentResp{Total: total}, s.leave("SumRefundsForPayment", nil)
 }
 
-func (s *memStore) CreateRefund(_ context.Context, in *pb.CreateRefundReq, _ ...grpc.CallOption) (*pb.CreateRefundResp, error) {
+func (s *memStore) CreateRefund(ctx context.Context, in *pb.CreateRefundReq, _ ...grpc.CallOption) (*pb.CreateRefundResp, error) {
+	if err := s.locks.keyShare(ctx, in.GetPaymentId()); err != nil {
+		return nil, err
+	}
 	if err := s.enter("CreateRefund"); err != nil {
 		return nil, s.leave("", err)
 	}
@@ -673,7 +709,10 @@ func (s *memStore) CreateRefund(_ context.Context, in *pb.CreateRefundReq, _ ...
 
 // RecordProviderRefund: INSERT without idempotency_key (NULL, so it never
 // collides on that column).
-func (s *memStore) RecordProviderRefund(_ context.Context, in *pb.RecordProviderRefundReq, _ ...grpc.CallOption) (*pb.RecordProviderRefundResp, error) {
+func (s *memStore) RecordProviderRefund(ctx context.Context, in *pb.RecordProviderRefundReq, _ ...grpc.CallOption) (*pb.RecordProviderRefundResp, error) {
+	if err := s.locks.keyShare(ctx, in.GetPaymentId()); err != nil {
+		return nil, err
+	}
 	if err := s.enter("RecordProviderRefund"); err != nil {
 		return nil, s.leave("", err)
 	}
@@ -762,7 +801,10 @@ func disputeStatusCheck(st int32) error {
 	return nil
 }
 
-func (s *memStore) CreateDispute(_ context.Context, in *pb.CreateDisputeReq, _ ...grpc.CallOption) (*pb.CreateDisputeResp, error) {
+func (s *memStore) CreateDispute(ctx context.Context, in *pb.CreateDisputeReq, _ ...grpc.CallOption) (*pb.CreateDisputeResp, error) {
+	if err := s.locks.keyShare(ctx, in.GetPaymentId()); err != nil {
+		return nil, err
+	}
 	if err := s.enter("CreateDispute"); err != nil {
 		return nil, s.leave("", err)
 	}
@@ -1060,7 +1102,10 @@ func (s *memStore) CreatePlan(_ context.Context, in *pb.CreatePlanReq, _ ...grpc
 	return &pb.CreatePlanResp{Plan: clone(p)}, s.leave("CreatePlan", nil)
 }
 
-func (s *memStore) CreateSubscription(_ context.Context, in *pb.CreateSubscriptionReq, _ ...grpc.CallOption) (*pb.CreateSubscriptionResp, error) {
+func (s *memStore) CreateSubscription(ctx context.Context, in *pb.CreateSubscriptionReq, _ ...grpc.CallOption) (*pb.CreateSubscriptionResp, error) {
+	if err := s.locks.keyShare(ctx, in.GetCustomerId()); err != nil {
+		return nil, err
+	}
 	if err := s.enter("CreateSubscription"); err != nil {
 		return nil, s.leave("", err)
 	}
@@ -1092,9 +1137,17 @@ func (s *memStore) MarkSubscriptionStatus(_ context.Context, in *pb.MarkSubscrip
 		if sub.GetStatus() == pb.Subscription_CANCELED {
 			break
 		}
-		// provider_event_at IS NULL OR provider_event_at <= :provider_event_at
-		if at := sub.GetProviderEventAt(); at != nil && at.AsTime().After(in.GetProviderEventAt().AsTime()) {
-			break
+		// provider_event_at IS NULL OR provider_event_at < :provider_event_at
+		// OR (provider_event_at = :provider_event_at AND (status <> :status
+		//     OR current_period_end IS DISTINCT FROM :current_period_end))
+		if at := sub.GetProviderEventAt(); at != nil {
+			held, got := at.AsTime(), in.GetProviderEventAt().AsTime()
+			if held.After(got) {
+				break
+			}
+			if held.Equal(got) && int32(sub.GetStatus()) == in.GetStatus() && sameInstant(sub.GetCurrentPeriodEnd(), in.GetCurrentPeriodEnd()) {
+				break
+			}
 		}
 		sub.Status = pb.Subscription_Status(in.GetStatus())
 		sub.CurrentPeriodEnd = in.GetCurrentPeriodEnd()

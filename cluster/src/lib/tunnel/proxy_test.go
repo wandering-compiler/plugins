@@ -490,3 +490,43 @@ func TestHandler_TheKeysThePickerConsumedStopAtTheRelay(t *testing.T) {
 	}
 	rel.await(t)
 }
+
+// The relay's callers port is an edge: any principal the ACL lets reserve
+// holds a ticket, and the worker behind it may be built from the SDK pieces
+// that believe gateway-owned metadata — the caller's identity envelope and
+// scopes (`x-w17-*`), its labels (`w17-label-*`), the transaction routing keys
+// (`w17-tx-id`, `w17-conn-id`) and the grpc-gateway spellings of them. Those
+// are believed only because every edge strips a client's copy, so the relay
+// strips them too (principal.IsEdgeReservedKey), whatever their case; the
+// caller's own headers still travel (cluster proxy gap 1).
+func TestHandler_GatewayOwnedKeysStopAtTheRelay(t *testing.T) {
+	w := newWorker()
+	backend, _ := reversed(t, w, nil)
+	rel := newReleases()
+	cc := proxy(t, func(context.Context, string) (Backend, error) {
+		return Backend{Conn: backend, Release: rel.release, Consumed: []string{"w17-cluster-ticket"}}, nil
+	})
+	forged := []string{
+		"x-w17-user", "Zm9yZ2Vk",
+		"x-w17-scope-org_id", "other-org",
+		"X-W17-Scope-User_Id", "someone-else",
+		"w17-label-account_kind", "bot",
+		"w17-tx-id", "11111111-1111-4111-8111-111111111111",
+		"w17-conn-id", "c-1",
+		"grpcgateway-authorization", "Bearer forged",
+	}
+	ctx := metadata.AppendToOutgoingContext(bounded(t), append([]string{"w17-cluster-ticket", "t-acme", "x-org", "org-a"}, forged...)...)
+	if _, err := pb.NewClusterServiceClient(cc).ReserveTask(ctx, &pb.ReserveTaskReq{Label: "build acme"}); err != nil {
+		t.Fatalf("a call through the proxy failed: %v", err)
+	}
+	md := w.metadata()
+	for i := 0; i < len(forged); i += 2 {
+		if got := md.Get(forged[i]); len(got) != 0 {
+			t.Errorf("the worker saw the gateway-owned key %s = %q", forged[i], got)
+		}
+	}
+	if got := md.Get("x-org"); len(got) != 1 || got[0] != "org-a" {
+		t.Errorf("the worker saw x-org = %q, want the caller's header untouched", got)
+	}
+	rel.await(t)
+}

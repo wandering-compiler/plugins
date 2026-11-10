@@ -6,7 +6,7 @@ application built on it relies on. It is the reference the plugin's tests and
 the example projects are measured against. A property listed here without a
 proof is a gap, not a promise.
 
-It covers plugin version 0.1.0-rc.24.
+It covers plugin version 0.1.0-rc.58 and the unreleased changes in `changes/`.
 
 ## How to read it
 
@@ -45,7 +45,7 @@ It covers plugin version 0.1.0-rc.24.
 | `sign_up_confirmation` | off | `sign_up_turnkey` | — |
 | `sign_in_turnkey` | on | — | — |
 | `api_token` | off | `rbac` | — |
-| `devices` | off | — | — |
+| `devices` | off | `authenticate_turnkey` | — |
 | `oauth` | off | `email_verification` | — |
 | `two_factor` | off | `sign_in_turnkey` | — |
 | `two_factor_enrolment` | off | `two_factor` | — |
@@ -56,6 +56,7 @@ It covers plugin version 0.1.0-rc.24.
 | `org_invite` | off | `org_membership`, `rbac` | — |
 | `invite_accept_from_list` | off | `org_invite` | — |
 | `invite_accept_at_signup` | off | `org_invite` | — |
+| `backoffice_invites` | off | `org_invite` | — |
 | `marketing_consent` | off | `authenticate_turnkey` | — |
 | `password_change` | off | — | — |
 | `step_up` | off | — | — |
@@ -76,10 +77,28 @@ It covers plugin version 0.1.0-rc.24.
 | `oauth_server` | off | `api_token`, `authenticate_turnkey` | — |
 | `membership_kinds` | off | `org_membership` | — |
 | `org_packages` | off | `org_membership` | — |
+| `org_hosts` | off | `org_membership` | — |
+| `org_two_factor_policy` | off | `two_factor`, `org_membership` | — |
+| `org_email_proof_policy` | off | `email_verification`, `org_membership` | — |
+| `two_factor_enrolment` | off | `two_factor` | — |
+| `org_signup` | off | `org_hosts`, `rbac` | — |
+| `product_roles` | off | `org_membership` | — |
+| `product_plans` | off | `product_roles` | — |
+| `named_product_plans` | off | `product_plans` | — |
 
 `go_files_combined`: `service_account_org.go` (`service_account` +
 `org_membership`), `oauth_server_org.go` (`oauth_server` + `org_membership`),
-`membership_kinds_invite.go` (`membership_kinds` + `org_invite`).
+`membership_kinds_invite.go` (`membership_kinds` + `org_invite`),
+`org_invite_at_signup_confirm.go` (`invite_accept_at_signup` +
+`sign_up_confirmation`), `product_roles_invite.go` (`product_roles` +
+`org_invite`), `product_roles_signup.go` (`product_roles` + `org_signup`),
+`product_roles_token.go` (`product_roles` + `api_token`),
+`oauth_server_kinds.go` (`oauth_server` + `membership_kinds`),
+`signup_confirm_org.go` (`sign_up_confirmation` + `org_signup`),
+`admin_lockout_rbac.go` (`user_admin` + `rbac`).
+
+The table is the manifest's `features:` list (`plugin.yaml`); `tenant_scope`
+was retired in rc.57 and is not a feature any more.
 
 ## Verified findings
 
@@ -234,7 +253,8 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 | `rbac/role-update-cannot-widen` | `UpdateRole` MUST change only `name` and `description`. The privilege flags MUST stay declarative, so the admin edit form cannot widen a grant. | Security | none (DQL only) |
 | `rbac/deleted-role-grants-nothing` | After `DeleteRole`, no query MUST report any permission that role carried. `DeleteRole` revokes every live grant of the role in the same transaction, and every role and permission reader (`GetUserPermissions` included, which now joins `Role`) skips a deleted role, a revoked grant and a removed permission. | Security | `TestEveryFormerDeleteIsAGuardedStateChange` (DeleteRole's two legs), `TestEveryReaderSkipsEndedRows` (every reader; the LEFT JOIN filters in their ON; GetUserPermissions joins the role). **Unit (mock) only:** a live test would delete a role and show `Authenticate` and `GetUserPermissions` no longer report its permissions. |
 | `rbac/removal-is-a-state` | Retiring a role, revoking a grant and removing a permission MUST NOT delete a row. `DeleteRole` stamps `Role.deleted_at` and releases the name (`ended_key` = id), a preset role (`preset_key` set) included, and MUST keep `preset_key` on the deleted row: the platform's role seed (the Role row's `upsert_on: [preset_key]` and its declared `fields`, applied by the console's fixture apply) matches the row by that key and rewrites only the columns it declares — never `deleted_at` or `ended_key` — so a deleted preset STAYS deleted across re-seeds and no second row is written that could collide on the seed's deterministic id; the seed never retires an undeclared role, so this delete is the only way to end one; `RevokeRoleFromUser` stamps `UserRole.revoked_at` / `revoked_by` and releases the grant's key; `RemovePermissionFromRole` stamps `RolePermission.removed_at` / `removed_by`. Each is guarded on its state column being NULL: a second one matches nothing (NotFound), as the delete of a missing row did. A released key MAY be taken again by a new row (a new role with the name, the same grant again); a removed permission is REVIVED by `AddPermissionToRole` (the one table that keeps one row per pair — its unique index is the role seed's conflict target), and both permission calls append to `RolePermissionChange` in the same transaction, so the revive loses no history. `AddPermissionToRole` and `AssignRoleToUser` MUST refuse a deleted or unknown role (`NotFound` / `ROLE_NOT_FOUND`), and `AddPermissionToRole` a permission the role already carries (`AlreadyExists` / `PERMISSION_ALREADY_GRANTED`), before writing: only a real change is logged, and `RolePermissionAdded` fires only for one. | Consistency & concurrency | `TestEveryFormerDeleteIsAGuardedStateChange`, `TestRoleWritesRefuseADeletedRoleAndANoOp`, `TestDeleteRoleKeepsAPresetsKey`, `TestUniqueIndexesLetAnEndedKeyBeReused`, `TestNoStatementDeletesAnything`. **Unit (mock) only:** these mutations have no handler; a live test would revoke and re-grant a role and remove and re-add a permission and count the rows. |
-| `rbac/first-user-bootstrap-once` | The `first_user` role set (typically a wildcard superadmin) MUST be granted to at most one account per deployment, even when the first registrations arrive concurrently. | Security | `TestAssignSignupRoles_FirstUserGetsBootstrapRoles`, `TestAssignSignupRoles_LaterUserGetsDefaultRoles`, `TestAssignSignupRoles_ConcurrentFirstSignUpsGetOneBootstrapAdmin`, `TestAssignSignupRoles_ATakenClaimIsNotReopened`, `TestBootstrapSlot_FitsItsColumn` (the claim key passes the column's validation). **Unit (mock) only**, with a scripted `CountUsers` and a mocked claim. A live test would fire N concurrent SignUps against an empty table and assert exactly one holder of the `first_user` roles. |
+| `rbac/no-admin-lockout-by-role-deletion` | Retiring a live wildcard role (`all_permissions`) through `DeleteRole` — the admin Roles page's `delete`, which binds the mutation directly — MUST be refused (`LAST_ADMIN_ROLE`, FailedPrecondition, before any grant is revoked) while one of its live holders holds no live grant of another live wildcard role, in any organization or none, of either realm. Retiring the wildcard every superadmin held used to revoke every administrator grant in one click, with no in-product way back (the `BootstrapClaim` stays taken, the page cannot create or widen a role, a re-seed brings the preset back to nobody). The rule is per holder rather than "someone else still administers the realm": the guard lives in the statement, whose subqueries cannot be feature-gated, and whether an account can act (`disabled_at`, `erased_at`) exists only with `user_admin`. The statement first locks every live wildcard row, so two retirements of two wildcards someone holds both of run one after the other and the second one's guard sees the first. A wildcard nobody relies on alone, and every other role, retires as before. | Security | `TestDeleteRole_AWildcardsLastHolderIsNotStranded` (the statement: lock, guard, then writes). Ran against PostgreSQL 18 (see "How to prove it"): the only wildcard held → refused, nothing revoked; a holder with no other wildcard → refused; every holder holding another → retired; a deleted second wildcard does not count; two concurrent retirements of the two wildcards one account holds → the second refused. |
+| `rbac/first-user-bootstrap-once` | The `first_user` role set (typically a wildcard superadmin) MUST be granted to at most one account per deployment, even when the first registrations arrive concurrently. | Security | `TestAssignSignupRoles_FirstUserGetsBootstrapRoles`, `TestAssignSignupRoles_LaterUserGetsDefaultRoles`, `TestAssignSignupRoles_ConcurrentFirstSignUpsGetOneBootstrapAdmin`, `TestAssignSignupRoles_ATakenClaimIsNotReopened`, `TestBootstrapSlot_FitsItsColumn` (the claim key passes the column's validation), `TestSignUp_OnlyTheDeploymentsFirstAccountIsBootstrapped` (through SignUp: an organization's first registration on its host gets the default roles), `TestCountUsers_IsRealmWide` (the count has no organization to ride on). **Unit (mock) only**, with a scripted `CountUsers` and a mocked claim. A live test would fire N concurrent SignUps against an empty table and assert exactly one holder of the `first_user` roles. |
 | `rbac/signup-roles-atomic` | The sign-up role links MUST commit in the same transaction as the `User` row and its first token. A failed assignment MUST leave no account. | Consistency & concurrency | none. No test drives SignUp or ConfirmSignUp through the transaction fake with a failing `AssignRoleToUser`. |
 | `rbac/role-resolution-cost` | Authenticating a request MUST cost a bounded number of indexed queries: one token lookup and one role-grant query (an API token adds its subset query), plus the staged decorators' and narrowers' own fixed reads (`auth/authenticate-read-only`). It MUST NOT grow with the number of roles or permissions. | Performance | `TestAuthenticate_QueryCountIsFixedWhateverTheRoleCount` (1 and 40 roles cost the same; session 2 queries, API token 3, +1 per decorator). That the queries are index-served is schema (`auth/lookup-columns-indexed`). |
 
@@ -243,6 +263,7 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 1. **The first stranger to register becomes the bootstrap admin.** The race is fixed in rc.25: the `first_user` set goes only to the sign-up that writes the `BootstrapClaim` row inside its transaction (`assignSignupRoleIDs`). What remains is by design and documented in the README: `sign_up_turnkey` is on by default and public, so the first person to reach `/auth/register` on an empty deployment becomes superadmin unless the operator seeds an account first. A seeded account writes no claim, so on such a deployment deleting every account reopens the bootstrap. Without `DistTx` the claim commits on its own, ahead of the role links; a failure after it leaves the claim taken for good (see `sign_up_turnkey` gap 2). The blocked sign-up gets the default roles only under READ COMMITTED (PostgreSQL's default) or MySQL; a PostgreSQL server defaulting to REPEATABLE READ or SERIALIZABLE answers it with a serialization failure instead.
 2. **Fixed: `GetUserPermissions` ignored deleted roles.** It joins `Role` now and skips a deleted role, a revoked grant and a removed permission; `DeleteRole` also revokes the role's grants (`rbac/deleted-role-grants-nothing`).
 3. **Retired: orphan link rows.** A retired role's grants are revoked with it, and its `RolePermission` rows are kept on purpose as the record of what it granted; no reader counts either.
+7. **Fixed: retiring the wildcard role locked the realm out.** `DeleteRole` revoked every live grant of the role with no last-administrator guard; the wildcard preset's retirement revoked every superadmin's grant, and nothing in the product could restore one. It now refuses while a holder relies on that wildcard alone (`rbac/no-admin-lockout-by-role-deletion`). `RevokeRoleFromUser`, the storage mutation, is not held to it; no admin page binds it.
 5. **Changed: a preset role deleted at runtime stays deleted.** It used to come back on the next seed (as a new row, without its holders). Now the deleted row keeps its `preset_key`, and the seed, which matches on that key and never writes `deleted_at`, rewrites its declared columns and leaves it deleted — like a seeded permission removed at runtime (gap 6). To bring a preset back, declare it under a new key. The seed's own updates of the deleted row (label, flags) are harmless: no reader counts a deleted role; a seed that knows `deleted_at` leaves a deleted role's `RolePermission` rows alone.
 6. **The platform's role seed: ends and revives, once it knows this release.** A role seed that sees `RolePermission.removed_at` ends the rows a declaration no longer selects (`removed_at`, never a `DELETE`), revives a declared pair `RemovePermissionFromRole` removed — so a seeded permission removed at runtime comes back on the next seed; only a change to the declaration removes it for good — and logs each change in `RolePermissionChange` (`changed_by` NULL) in the same statement as the change. An older platform still prunes with a `DELETE` and cannot revive. Both behaviours belong to the platform, not to a statement of this plugin.
 4. **Fixed: a stale contract comment.** `GetUserByTokenWithPermissions` said it returned the permissions in one round trip; it returns the token, user and device, and says that the permissions are `GetUserRoleGrants`.
@@ -972,10 +993,14 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | org_signup/same-transaction | The membership and its org-scoped grant MUST be written in the account's own transaction, the role resolved against the organization's catalogue then. | Consistency & concurrency | `TestWriteSignUpJoin`; live: `examples/grant-proof` |
 | org_signup/decided-at-request | With sign_up_confirmation, the join MUST be decided when the registration is requested and carried on the pending row. | Correctness | `TestPendingSignUpCarriesTheJoin` |
 | org_signup/realm-only | Policies MUST be set, cleared and listed realm-wide only, where the endpoint ACL is on; a policy MUST name a kind exactly when memberships have kinds, and an open one a role the organization can hand out. | Security | `TestSetOrgSignUpPolicy` |
+| org_signup/ceiling | An open policy's role MUST be one the operator setting it may grant — they hold every permission it carries (the role ceiling; an organization's wildcard only by one who holds the whole lock) — and a policy above it MUST be refused (`ROLE_ABOVE_CALLER`) with nothing written; a request with no resolved permissions MUST be refused. The registration grants the role with no ceiling of its own (the registrant holds nothing), so the policy is where the grant is authorised. | Security | `TestSetOrgSignUpPolicy_HoldsTheRoleToTheCallersCeiling` |
+| org_signup/retired-role | A registration whose policy role is no longer in the organization's catalogue MUST be refused, writing no membership and no grant; it MUST NOT fall back to another role, which nobody chose for the policy and no ceiling was checked against. | Security | `TestWriteSignUpJoin` |
 
 **Gaps / suspected defects**
 1. A policy is per (organization, kind) and set by the backoffice; an organization does not set its own.
 2. The host names the organization a registration joins: the gateway's, or on the identity's own host the one the request names (`signup_host`); an organization in the path does not.
+3. **Fixed: the policy's role was not held to the role ceiling.** `SetOrgSignUpPolicy` checked only that the role exists in the organization's catalogue, so an operator holding the policy methods but not the organization's wildcard could open registration with it, and every registration on the host was granted it (`org_signup/ceiling`).
+4. The policy stores the role's name, not a snapshot of what it carried when it was checked (an invitation stores one, `checkRoleWithinSnapshot`). A role widened after the policy was set is granted at registration as it now reads. The widening itself is held to the ceiling of whoever redefines the role (`org_roles`), but nothing re-checks the policy against it; a snapshot needs a column on `OrgSignUpPolicy` (a schema change), and until then an operator re-sets the policy after redefining its role.
 
 ### product_roles
 
@@ -1023,7 +1048,7 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 
 **Adds**
 - Table `OrgProductAllowance` (org_id, product, role_key — `''` = the whole product, allowed_by/at, ended_by/at, ended_key).
-- Business: `ListOrgProductPlan`, `AllowOrgProduct`, `DisallowOrgProduct` (realm-wide only; `GET` / `PUT /auth/admin/orgs/{org_id}/product-plan`, `POST …/product-plan/remove`); `ListMyOrgProductPlan` (`GET /auth/orgs/{org}/product-plan`).
+- Business: `ListOrgProductPlan`, `AllowOrgProduct`, `DisallowOrgProduct` (realm-wide only; `GET` / `PUT /auth/admin/orgs/{org_id}/product-plan`, `POST …/product-plan/remove`); `DisallowOrgProducts` (realm-wide only: lines picked by their row ids, the shape an admin row action sends, where `DisallowOrgProduct`'s (org, product, role) key is one a page cannot stamp); `ListMyOrgProductPlan` (`GET /auth/orgs/{org}/product-plan`).
 - Errors `PRODUCT_ROLE_NOT_IN_PLAN` (412), `PRODUCT_PLANS_REALM_ONLY` (403).
 
 **Requires / conflicts / combined files.** Requires `product_roles`. Go file: `handlers/product_plans.go` (a `productRoleBounds` entry).
@@ -1033,6 +1058,7 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | product_plans/bounds | A product role held in an organization MUST count only while the organization's plan carries it (the role, or the whole product), on every request; an organization with no line for a product MUST hold nothing there; realm-wide grants MUST NOT be bounded. | Security | `TestAnswerProductRoles`, `TestProductPlanLines`; live: `examples/product-roles-proof` |
 | product_plans/no-grant-outside | Nobody MUST be able to hand out a role the plan does not carry. | Security | `TestAssignOrgProductRole`, `TestBackofficeProductRoles` |
 | product_plans/realm-only | Lines MUST be given and taken realm-wide only, where the endpoint ACL gates the method. | Security | `TestProductPlanLines` |
+| product_plans/bulk-by-id | `DisallowOrgProducts` MUST be realm-wide only and ACL-gated like `DisallowOrgProduct`; it MUST end each picked line under that line's organization's lock, and skip an id that is not a live line or was ended since it was read. | Security | `TestDisallowOrgProducts_EndsTheLinesPickedByID` |
 
 ### named_product_plans
 
@@ -1165,7 +1191,7 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | user_admin/email-change-drops-proof | An email change MUST clear every proof of address ownership recorded for the previous address. | Security | none. Partly violated, see gap 3. |
 | user_admin/email-canonical | An email written through the admin MUST be stored in the same canonical (trimmed, lower-cased) form that sign-in looks up. | Consistency & concurrency | none. **Violated**, see gap 2. |
 | user_admin/revoke-token-immediate | `RevokeUserToken` MUST make that token fail the next authentication. | Consistency & concurrency | none (live) |
-| user_admin/no-self-lockout | An operator MUST NOT be able to disable or erase their own account (`OWN_ACCOUNT`), nor the last account able to administer the realm (`LAST_ADMIN`), both FailedPrecondition before anything is written. An account able to administer the realm is one with a live grant of a live wildcard role (`all_permissions`, any organization or none) of the session realm, neither disabled nor erased (`ListRealmSuperadmins`; a machine account's API-realm wildcard does not count). The check and the writes are ONE transaction: the administrators are read (`ListRealmSuperadmins`), their User rows locked in id order (`LockUsers`, SELECT … FOR UPDATE — a JOIN-shaped read cannot carry the lock) and read again, so two operators disabling each other at once run one after the other and the second sees what the first disabled. A realm with no such account, or without `rbac`, refuses nothing. The admin's Disable action is `DisableAccounts`; the storage bulk form `DisableUsers` is not held to it. | Failure & configuration | `TestDisableAccounts_RefusesTheOperatorsOwnAccount`, `TestDisableAccounts_KeepsTheLastAdministrator` (a disabled administrator does not count), `TestDisableAccounts_ARealmWithoutAdministratorsRefusesNothing`, `TestEraseUsers_KeepsTheOperatorAndTheLastAdministrator`. **Unit (mock) only** for the race: two parallel disables need a live database to show the lock serialising them. |
+| user_admin/no-self-lockout | An operator MUST NOT be able to disable or erase their own account (`OWN_ACCOUNT`), nor the last account able to administer the realm (`LAST_ADMIN`), both FailedPrecondition before anything is written. An account able to administer the realm is one with a live grant of a live wildcard role (`all_permissions`, any organization or none) of the session realm, neither disabled nor erased (`ListRealmSuperadmins`; a machine account's API-realm wildcard does not count). The check and the writes are ONE transaction: the administrators are read (`ListRealmSuperadmins`), their User rows locked in id order (`LockUsers`, SELECT … FOR UPDATE — a JOIN-shaped read cannot carry the lock) and read again, so two operators disabling each other at once run one after the other and the second sees what the first disabled. A realm with no such account, or without `rbac`, refuses nothing. The admin's Disable action is `DisableAccounts`; the storage bulk form `DisableUsers` is not held to it. Retiring a wildcard role is held to its own rule (`rbac/no-admin-lockout-by-role-deletion`). | Failure & configuration | `TestDisableAccounts_RefusesTheOperatorsOwnAccount`, `TestDisableAccounts_KeepsTheLastAdministrator` (a disabled administrator does not count), `TestDisableAccounts_ARealmWithoutAdministratorsRefusesNothing`, `TestEraseUsers_KeepsTheOperatorAndTheLastAdministrator`. **Unit (mock) only** for the race: two parallel disables need a live database to show the lock serialising them. |
 | user_admin/listing-bounded | `ListUsers`, `ListUserTokens`, `ListSignInEvents` and `ListAllDevices` MUST be paged. | Performance | Each response declares `w17.Paging` (cursor-paged by the admin list handler); `TestDevicesAdminStatements` (the Devices order the keyset seeks on). No unit test pages them. |
 
 **Erasure, table by table.** Nothing is deleted; what is personal is replaced, blanked or spent.
@@ -1407,6 +1433,28 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 7. **Decided: `POST /auth/invites/accept` has no `public_limit`.** The gateway rate-limits per address only an `exclude_auth` endpoint; this one needs an account, and the token is 256-bit random.
 8. **Decided: expiry mixes clocks.** `expires_at` is written from the application's clock and compared with the database's `NOW()`, as for every token of this plugin: the DQL has no interval arithmetic. Skew shortens or lengthens the TTL by the skew.
 
+### backoffice_invites
+
+**Purpose.** The backoffice manages invitations in every organization — its operators are usually members of none. It invites into an organization it names, and withdraws invitations picked from the realm-wide list, whatever organizations they are in.
+
+**Adds**
+- Business RPCs: `InviteToOrgAdmin` (an `InviteToOrgReq` whose `org` names the organization by its slug), `RevokeOrgInvites` (invitation ids, any organizations).
+- Query: `ListOrgInvitesAdmin` (every organization's pending invitations, the organization's name beside its id).
+- REST: `POST /auth/admin/invites`, `POST /auth/admin/invites/withdraw`. Bearer token; neither is `public` or `failed_only`.
+- Admin page `OrgInvites`: the list, an "Invite to an organization" action with an organization picker that shows the link once, and "Withdraw" over picked rows.
+
+**Requires / conflicts / combined files.** Requires `org_invite`. Go file: `handlers/org_invite_backoffice.go`. `InviteToOrgAdmin` runs `org_invite`'s own path (`inviteInto`): the role ceiling and its snapshot, the kind rule (`membership_kinds`), the one-pending-per-address and already-a-member rules, the product roles (`product_roles`). They are methods of their own rather than a mode of `InviteToOrg` because a project's default role commonly grants `AuthService.*` to every account: a realm path through `InviteToOrg` would let anyone invite themselves into any organization. Exclude these two from such a role, as the plan methods are.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| backoffice_invites/realm-only-acl-gated | `InviteToOrgAdmin` and `RevokeOrgInvites` MUST act realm-wide: from inside an organization only for a caller holding the method realm-wide, and only when the endpoint ACL gates the method (it is in the lock); otherwise PermissionDenied with nothing written or closed. | Security | `TestInviteToOrgAdmin_TheBackofficeInvitesIntoTheNamedOrganization`, `TestRevokeOrgInvites_TheBackofficeWithdrawsAcrossOrganizations` |
+| backoffice_invites/named-organization | `InviteToOrgAdmin` MUST invite into the live organization its request names by slug (NotFound for none, InvalidArgument for no name), under that organization's lock, and MUST store the invitation there; `InviteToOrg` MUST stay in the active organization whatever `org` says. | Security | `TestInviteToOrgAdmin_TheBackofficeInvitesIntoTheNamedOrganization`, `TestInviteToOrg_StaysInTheActiveOrganization` |
+| backoffice_invites/ceiling | `InviteToOrgAdmin` MUST refuse a role above the caller's ceiling (`ROLE_ABOVE_CALLER`), as `InviteToOrg` does. `RevokeOrgInvites` MUST hold every named invitation to the ceiling in its own organization before it closes any: one above the caller refuses the whole call (`INVITE_ABOVE_CALLER`) with nothing closed. | Security | `TestBackofficeInvites_HeldToTheRoleCeiling` |
+| backoffice_invites/withdraw-in-place | `RevokeOrgInvites` MUST close each invitation in its own organization (`org_id` in the statement), recording the operator, never delete it; an id no longer pending, or closed since it was read, MUST be skipped. | Consistency & concurrency | `TestRevokeOrgInvites_TheBackofficeWithdrawsAcrossOrganizations` |
+
+**Gaps / suspected defects**
+1. `RevokeOrgInvites` closes each invitation in its own statement, not in one transaction: a failure part way leaves the earlier ones closed. Running it again closes the rest (closed ones are skipped).
+
 ### invite_accept_at_signup
 
 **Purpose.** A registration through an invitation's link joins at once: the person arrives a member with the invited role, without a second call.
@@ -1460,25 +1508,26 @@ Abbreviations: **rb** rbac, **at** authenticate_turnkey, **su** sign_up_turnkey,
 Cell codes (row × column, upper triangle; the relation is symmetric unless the code says which side):
 **R** one requires the other (plugin.yaml) · **X** conflicts_with · **C** combined go_files · **H** one overrides or extends the other's seam/hook · **T** shared table or column (one writes or deletes what the other reads) · **Q** shared query/RPC or shared helper · **O** ordering constraint inside one request · **G** one feature's gate applies on the other's path · **·** no interaction found.
 
-|    | rb | at | su | sc | si | ts | ap | dv | oa | tf | pr | ev | cl | om | oi | pc | sa | ua |
-|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|
-| **rb** | — | R Q | H O | H | · | Q | T Q | · | H | · | · | · | · | R T Q | R T | · | R T | T |
-| **at** | | — | · | · | · | H | H | Q | · | · | · | · | G | R H | · | Q | R H | G |
-| **su** | | | — | R H | · | R H | · | T | G | · | · | · | · | · | H G | · | · | · |
-| **sc** | | | | — | · | C | · | T | G | · | · | H | · | · | G O | · | · | · |
-| **si** | | | | | — | · | · | R H | · | R H O | · | · | · | · | · | · | H O | H O |
-| **ts** | | | | | | — | · | · | X | · | · | · | · | H | · | · | C | · |
-| **ap** | | | | | | | — | Q T | · | · | T | · | G | H O | · | T | R Q | T |
-| **dv** | | | | | | | | — | H | H R* | T | · | T | · | · | T | · | T |
-| **oa** | | | | | | | | | — | O | · | R T | · | · | G | · | G | G T |
-| **tf** | | | | | | | | | | — | O | · | O | · | · | O | G | G |
-| **pr** | | | | | | | | | | | — | · | · | · | · | T | G | G |
-| **ev** | | | | | | | | | | | | — | · | · | H G | · | · | T |
-| **cl** | | | | | | | | | | | | | — | · | · | · | G | G |
-| **om** | | | | | | | | | | | | | | — | R T | · | C | T |
-| **oi** | | | | | | | | | | | | | | | — | · | · | T |
-| **pc** | | | | | | | | | | | | | | | | — | G | · |
-| **sa** | | | | | | | | | | | | | | | | | — | R T |
+|    | rb | at | su | sc | si | ap | dv | oa | tf | pr | ev | cl | om | oi | pc | sa | ua |
+|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|
+| **rb** | — | R Q | H O | H | · | T Q | · | H | · | · | · | · | R T Q | R T | · | R T | T |
+| **at** | | — | · | · | · | H | Q | · | · | · | · | G | R H | · | Q | R H | G |
+| **su** | | | — | R H | · | · | T | G | · | · | · | · | · | H G | · | · | · |
+| **sc** | | | | — | · | · | T | G | · | · | H | · | · | G O | · | · | · |
+| **si** | | | | | — | · | R H | · | R H O | · | · | · | · | · | · | H O | H O |
+| **ap** | | | | | | — | Q T | · | · | T | · | G | H O | · | T | R Q | T |
+| **dv** | | | | | | | — | H | H R* | T | · | T | · | · | T | · | T |
+| **oa** | | | | | | | | — | O | · | R T | · | · | G | · | G | G T |
+| **tf** | | | | | | | | | — | O | · | O | · | · | O | G | G |
+| **pr** | | | | | | | | | | — | · | · | · | · | T | G | G |
+| **ev** | | | | | | | | | | | — | · | · | H G | · | · | T |
+| **cl** | | | | | | | | | | | | — | · | · | · | G | G |
+| **om** | | | | | | | | | | | | | — | R T | · | C | T |
+| **oi** | | | | | | | | | | | | | | — | · | · | T |
+| **pc** | | | | | | | | | | | | | | | — | G | · |
+| **sa** | | | | | | | | | | | | | | | | — | R T |
+
+`tenant_scope` (**ts**) was retired in rc.57 and its column and row are gone. The matrix covers the features above; those added since (`org_hosts` … `named_product_plans`, `backoffice_invites`, `teams`, `bot_roles`, `org_roles`, `membership_kinds`, `org_packages`, `oauth_server`) state their interactions in their own sections and in the interaction tables below.
 
 `admin_sign_ins` and `admin_devices` are left out of the matrix: each gates one admin page and requires `user_admin` (**R** with **ua**), and touches nothing else.
 
@@ -1541,7 +1590,8 @@ Proof column: exact unit-test names in `auth/src/handlers`, or `none`. A unit te
 | `interaction/password_reset-sweep-outside-tx` | pr ap dv | O | The password write and the token sweep are **not** one unit of work: the sweep runs after commit, so a reset can succeed while an attacker's sessions survive. ChangePassword puts both in one transaction; ResetPassword should do the same. | TestResetPassword_ReportsWhenTheSessionSweepDidNotRun (documents the split) |
 | `interaction/credential-change-device-trust` | pr pc ua | Q: `UpdateUserPasswordIfUnchanged` (pc) and `DisableUsers` (ua) write `device_trust_revoked_at = NOW()` in every activation; `mintDevice` and `ListDevices` compare it with `Device.trusted_at`. | A password change or a disable ends the trust of every device of the account in its own statement; under `new_devices` each of them, the changing caller's included, passes the second factor again. A reset keeps trust by design: the reset link proved the mailbox, which is treated as the second factor. RevokeDevice/Other/All end trust per device for good. | `TestChangePassword_RevokesDeviceTrustInTheSameStatement`, `TestDisableUsers_RevokesDeviceTrustInTheSameStatement`, `TestMintDevice_TrustRevokedByACredentialChange_NotTrusted`, `TestSignIn_DoesNotRenewRevokedDeviceTrust`, `TestListDevices_TrustRevokedByACredentialChange_NotShownTrusted` |
 | `interaction/service_account-api_token-realm` | sa ap rb | R Q | A machine account holds only API-realm roles (CreateBot refuses a session-realm role). Its tokens go through `issueApiTokenTx` and `apiTokenExpiry`, the same paths as a person's API token. | TestCreateBot_RefusesARoleFromTheSessionRealm, TestCreateBot_AcceptsAnApiRealmRoleAndGrantsIt, TestIssueBotToken_MintsForABot, TestIssueBotToken_RefusesAPerson |
-| `interaction/role-ceiling-shared` | om oi sa rb at | Q: `role_ceiling.go` reads the caller's resolved permissions from the AuthResp envelope and the role catalogue. | Granting a role (invite, membership role change, membership removal, bot creation, bot token) requires the caller to hold every permission the role carries. With no envelope, the request is refused; code acting for a person stamps `ResolveUser`'s answer as the envelope (`principal.ActAs`), so the ceiling judges that person. An invitation snapshots the role (a wildcard one as `*`), and acceptance is refused if the role has widened since. | TestRoleWithinCeiling, TestInviteToOrg_RefusesARoleAboveTheInviter, TestCreateBot_RefusesARoleAboveTheOperator, TestIssueBotToken_RefusesABotAboveTheOperator, TestUpdateOrgMembershipRole_RefusesARoleAboveTheCaller, TestMembership_TheMemberAboveTheCallerIsNotTheirsToChange, TestCheckMayGrantRole_NoEnvelopeFailsClosed, TestAcceptOrgInvite_RefusesARoleWidenedSinceTheInvitation, TestResolveUser_TheCeilingJudgesThePersonActedFor |
+| `interaction/backoffice_invites-org_invite` | oi (backoffice_invites) | Q: `InviteToOrgAdmin` resolves the organization by slug and then runs `inviteInto`, `InviteToOrg`'s path; `RevokeOrgInvites` uses `inviteRoleCeiling` and `CloseOrgInvite`, `RevokeOrgInvite`'s. | Every rule of an invitation (ceiling and snapshot, kinds, one pending per address, already a member, product roles, acceptance) holds for one the backoffice made, because it is made by the same path; only who may call it and in which organization differ. | TestInviteToOrgAdmin_TheBackofficeInvitesIntoTheNamedOrganization, TestBackofficeInvites_HeldToTheRoleCeiling |
+| `interaction/role-ceiling-shared` | om oi sa rb at | Q: `role_ceiling.go` reads the caller's resolved permissions from the AuthResp envelope and the role catalogue. | Granting a role (invite, membership role change, membership removal, bot creation, bot token, an open registration policy's role) requires the caller to hold every permission the role carries. With no envelope, the request is refused; code acting for a person stamps `ResolveUser`'s answer as the envelope (`principal.ActAs`), so the ceiling judges that person. An invitation snapshots the role (a wildcard one as `*`), and acceptance is refused if the role has widened since. | TestRoleWithinCeiling, TestInviteToOrg_RefusesARoleAboveTheInviter, TestCreateBot_RefusesARoleAboveTheOperator, TestIssueBotToken_RefusesABotAboveTheOperator, TestUpdateOrgMembershipRole_RefusesARoleAboveTheCaller, TestMembership_TheMemberAboveTheCallerIsNotTheirsToChange, TestCheckMayGrantRole_NoEnvelopeFailsClosed, TestAcceptOrgInvite_RefusesARoleWidenedSinceTheInvitation, TestResolveUser_TheCeilingJudgesThePersonActedFor, TestSetOrgSignUpPolicy_HoldsTheRoleToTheCallersCeiling |
 | `interaction/org_invite-org_membership-rbac-accept-writes-both` | oi om rb | R T: AcceptOrgInvite writes OrgMembership and an org-scoped UserRole in one transaction. | An accepted invitation always produces both rows or neither. Only org-scoped roles may be invited. Removing a membership revokes the member's UserRoles in that org in the same unit of work. | TestRoleIDByName_RefusesARealmRole, TestAcceptOrgInvite_BoundRecordsDerivedAndOpenDoesNot (rollback on a real store: none) |
 | `interaction/service_account-org_membership-scoping` | sa om | C: `service_account_org.go` installs `botOrgs`. | With organizations, a bot is created as a member of the operator's active org with its role scoped there. Bots are listed and minted for only inside that org. A build that has org_membership but lacks the combined file refuses rather than serving every organization's bots. | TestCreateBot_JoinsTheOrgAndScopesTheGrantToIt, TestCreateBot_RefusesWithNoActiveOrg, TestListBots_AsksOnlyForTheActiveOrganization, TestIssueBotToken_RefusesABotFromAnotherOrganization, TestMachineAccounts_OrgsWithoutTheirScopingRefuse |
 | `interaction/service_account-authenticate-label` | sa at ua | H: `labelMachineAccount` decorator (uses `GetUser`, which is gated on user_admin; that gate is why sa requires ua). | A BOT principal carries `labels[account_kind]=bot`. A person carries no such label, so a rule of the form "refuse unless bot" fails closed. | `TestLabelMachineAccount_OnlyABotIsLabelled` (bot, person, unreadable kind; the decorator is staged) |
@@ -1698,6 +1748,7 @@ A unit test against a fake store cannot prove the invariants below. An example p
 10. **Secrets at rest on a real row**: legacy-token upgrade (seed a plaintext `token`, authenticate, assert `token_hash` set and `token` NULL); a TOTP seed and an OAuth client secret round-trip through the field keyring and move from their legacy columns.
 11. **Feature-combination builds**: each `go_files_combined` pair with and without its partner feature. A table, column or request field named across a feature boundary is caught statically by `check-stage`.
 12. **Nothing is deleted, on a real database** (`auth/nothing-is-deleted`): revoke a role grant, remove a membership, delete a role and an organization, remove a permission, withdraw and let lapse an invitation, confirm one of several registrations, disable and re-enrol an authenticator, replace a recovery-code set — and after each, diff the tables: every row still there with its state set, the ACL answer (Authenticate, `GetUserPermissions`) the one the delete gave, and the re-add (same grant, same member, the name or slug, the permission, the address, a new enrolment) accepted. The migration from rc.25 must keep every existing row live (`ended_key` `''`, every state column NULL).
+13. **No administrator stranded by a role's retirement** (`rbac/no-admin-lockout-by-role-deletion`): run `DeleteRole`'s four statements (`lock`, `last_admin`, `grants`, `main`) in one transaction against PostgreSQL with the realm's only wildcard held (refused, nothing revoked), a holder of only that wildcard beside one holding two (refused), every holder holding another live wildcard (retired, grants revoked), a second wildcard that is itself deleted (does not count), and two concurrent retirements of the two wildcards one account holds (the second waits on the lock and is refused). Done by hand for this release on PostgreSQL 18; an example's suite would repeat it through the admin page's `DELETE`.
 
 
 ### delivery (all features that mail a credential)
