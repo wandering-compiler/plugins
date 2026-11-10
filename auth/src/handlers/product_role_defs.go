@@ -300,7 +300,8 @@ func (h *AuthServiceHandler) RetireProductRole(ctx context.Context, req *pb.Reti
 
 // DefineOrgProductRole is the active organization's own role, held there:
 // every permission of it carried by a role the caller holds there (the
-// ceiling).
+// ceiling) — of the new definition and, for a live role, of the one it
+// replaces.
 func (h *AuthServiceHandler) DefineOrgProductRole(ctx context.Context, req *pb.DefineOrgProductRoleReq) (*pb.ProductRoleDefResp, error) {
 	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.DefineOrgProductRole); done {
 		return resp, err
@@ -331,6 +332,18 @@ func (h *AuthServiceHandler) DefineOrgProductRole(ctx context.Context, req *pb.D
 	if !covers(held, roleGrant{perms: perms}) {
 		return nil, refusal(ctx, codes.PermissionDenied, "product_roles: the role grants a permission the caller does not hold here",
 			CodeProductRoleAbove, "permissions", MsgProductRoleAbove, nil)
+	}
+	// Redefining a live role also changes what it carried: a permission
+	// dropped is taken from every holder. The caller must cover the role as
+	// it is too, as retiring it asks — or a redefinition would take what the
+	// caller could not give.
+	live, err := ownRoleDef(ctx, h, orgID, req.GetKey())
+	if err != nil {
+		return nil, err
+	}
+	if live != nil && !covers(held, roleGrant{perms: decodeRolePermissions(live.GetPermissions())}) {
+		return nil, refusal(ctx, codes.PermissionDenied, "product_roles: the live role grants a permission the caller does not hold here",
+			CodeProductRoleAbove, "role_key", MsgProductRoleAbove, nil)
 	}
 	return h.defineRole(ctx, caller, orgID, req.GetKey(), req.GetName(), true, perms)
 }

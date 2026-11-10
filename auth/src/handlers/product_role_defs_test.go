@@ -192,3 +192,35 @@ func mustCatalogue(t *testing.T, h *AuthServiceHandler) *productRoleCatalogue {
 	}
 	return c
 }
+
+// product_roles/ceiling: redefining a live role changes what it carried, so
+// the caller must cover the role as it is as well as the new permissions —
+// what retiring it asks. org-a's role "both" carries alpha's and beta's
+// ListNotes; alice holds alpha's there but nothing of beta. Narrowing "both"
+// to alpha alone takes beta's permission from every holder, which she could
+// not hand out: refused, and the role is left as it was. Widening a role she
+// covers stays hers to do.
+func TestDefineOrgProductRole_RedefiningIsHeldToTheLiveRoleToo(t *testing.T) {
+	h, m := defsHandler(t)
+	both := encodeRolePermissions(map[string][]string{"alpha": {"notes.NoteQuery.ListNotes"}, "beta": {"notes.NoteQuery.ListNotes"}})
+	m.defs = append(m.defs, &pb.ProductRoleDefRow{Id: "def-both", OrgId: "org-a", Key: "both", Name: "Both", OrgScoped: true, Permissions: both})
+	alice := whoAmICtx("alice", "org-a")
+
+	_, err := h.DefineOrgProductRole(alice, &pb.DefineOrgProductRoleReq{Key: "both", Name: "Both", Permissions: []string{"alpha:notes.NoteQuery.ListNotes"}})
+	if refusalCodeOf(err) != CodeProductRoleAbove {
+		t.Fatalf("alice narrowed a role carrying a permission she does not hold: err=%v, want %s", err, CodeProductRoleAbove)
+	}
+	for _, d := range m.defs {
+		if d.GetId() == "def-both" && d.GetPermissions() != both {
+			t.Errorf("the role was rewritten to %q", d.GetPermissions())
+		}
+	}
+
+	// A role within her ceiling is still hers to redefine.
+	if _, err := h.DefineOrgProductRole(alice, &pb.DefineOrgProductRoleReq{Key: "mine", Name: "Mine", Permissions: []string{"alpha:notes.NoteQuery.ListNotes"}}); err != nil {
+		t.Fatalf("defining a role within the ceiling: %v", err)
+	}
+	if _, err := h.DefineOrgProductRole(alice, &pb.DefineOrgProductRoleReq{Key: "mine", Name: "Mine again", Permissions: []string{"alpha:notes.NoteQuery.ListNotes"}}); err != nil {
+		t.Errorf("redefining a role within the ceiling: %v", err)
+	}
+}
