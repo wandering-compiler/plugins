@@ -718,3 +718,26 @@ func TestReconcile_AConsentLandingDuringThePassStandsSubscribed(t *testing.T) {
 		t.Errorf("row = %+v, want the yes and sent_blacklisted false", c)
 	}
 }
+
+// An unsubscribe dated in the future (a clock fault, or a forged body sent
+// with the token) is dated now: recorded "in 2030", every consent decided
+// before 2030 would read as older than it and stay blacklisted, and auth
+// would be handed a withdrawal from the future.
+func TestIngestBrevo_AFutureUnsubscribeIsDatedNow(t *testing.T) {
+	l := &ledger{contacts: map[string]*pb.ContactRow{
+		"u1": {UserId: "u1", Email: "a@x.example", Consent: true, ConsentAt: timestamppb.New(day1)},
+	}}
+	h := &hookCalls{}
+	body := `{"event":"unsubscribe","email":"a@x.example","ts_event":1893456000}` // 2030-01-01
+	before := time.Now().UTC()
+	if _, err := webhook(t, l, "s3cret", h).IngestBrevo(withToken("s3cret"), &pb.IngestBrevoReq{RawPayload: []byte(body)}); err != nil {
+		t.Fatal(err)
+	}
+	got := l.contacts["u1"].GetUnsubscribedAt().AsTime()
+	if got.After(time.Now().UTC()) || got.Before(before.Add(-time.Second)) {
+		t.Errorf("unsubscribed_at = %v, want now", got)
+	}
+	if len(h.got) != 1 || strings.HasSuffix(h.got[0], "2030-01-01T00:00:00Z") {
+		t.Errorf("the hook was handed %v, want a withdrawal dated now", h.got)
+	}
+}

@@ -69,15 +69,23 @@ type brevoWebhookEvent struct {
 	DateEvent string      `json:"date_event"`
 }
 
-// at is when it happened: ts_event (unix seconds), else date_event, else now.
+// at is when it happened: ts_event (unix seconds), else date_event, else
+// now — and never later than now. An unsubscribe dated in the future (a clock
+// fault, a forged body sent with the token) would outrank every consent
+// decided before that date (blacklisted compares the two) and reach auth as a
+// withdrawal from the future.
 func (e brevoWebhookEvent) at() time.Time {
+	now := time.Now().UTC()
+	at := now
 	if s, err := e.TsEvent.Int64(); err == nil && s > 0 {
-		return time.Unix(s, 0).UTC()
+		at = time.Unix(s, 0).UTC()
+	} else if t, err := time.Parse("2006-01-02 15:04:05", e.DateEvent); err == nil {
+		at = t.UTC()
 	}
-	if t, err := time.Parse("2006-01-02 15:04:05", e.DateEvent); err == nil {
-		return t.UTC()
+	if at.After(now) {
+		return now
 	}
-	return time.Now().UTC()
+	return at
 }
 
 // parseBrevoWebhook reads one event, or the array a batched webhook sends.
