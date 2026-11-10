@@ -160,6 +160,14 @@ service ClusterService {
 message ReserveTaskReq {
   // As ScheduleTaskReq.label: words for an operator, never parsed.
   string label = 1 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  // engine is an opaque name of what the work needs the worker to run — for
+  // a codegen pool, the codegen engine's version. The pool never interprets
+  // it: it compares strings. A relay places the reservation only while an
+  // attached worker carries the engine (or carries no list at all, which an
+  // older worker sends), and the proxy refuses a call whose
+  // `w17-cluster-engine` header names another engine than this. Empty binds
+  // nothing, as before the field existed.
+  string engine = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
 }
 
 message GetReservationReq {

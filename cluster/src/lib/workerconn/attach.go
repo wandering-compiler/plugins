@@ -89,6 +89,11 @@ type Config struct {
 	// load.
 	Slots uint32
 
+	// Engines names what this machine runs (AttachReq.engines) — for a codegen
+	// worker, its engine versions. A reservation naming an engine is sent only
+	// to a worker that lists it. Empty takes any work, as before engines.
+	Engines []string
+
 	// Readiness, if set, is consulted whenever the worker is asked whether it
 	// still wants work, and its answer is sent to the relay when it changes.
 	//
@@ -285,6 +290,7 @@ func attachOnce(ctx context.Context, cfg Config, onState func(State)) error {
 			DeviceId:  cfg.DeviceID,
 			Slots:     cfg.Slots,
 			Readiness: initial.proto(),
+			Engines:   cfg.Engines,
 		}},
 	}); err != nil {
 		return err

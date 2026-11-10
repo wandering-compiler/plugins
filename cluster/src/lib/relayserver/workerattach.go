@@ -139,6 +139,11 @@ func (s *WorkerServer) Attach(
 	}
 	att := s.newAttachment(id, slots)
 	defer att.close()
+	// What the machine runs, as announced — before readiness, so it is never
+	// credited ready for work it would be picked for without its engines.
+	if att.b != nil {
+		att.b.SetEngines(att.fp, att.gen, req.GetEngines())
+	}
 	// The worker's OWN answer, as of the announcement. Taken from the
 	// announcement rather than waiting for a first status, so a machine that
 	// came up already draining is never briefly counted as ready.
