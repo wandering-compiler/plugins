@@ -114,13 +114,13 @@ func TestEngineCapacity_PositionIsWithinTheEnginesQueue(t *testing.T) {
 	o1, _ := p.ReserveEngine(me, engOld)
 	n1, _ := p.ReserveEngine(me, engNew)
 	o2, _ := p.ReserveEngine(me, engOld)
-	if got := o1.State.Position; got != 1 {
+	if got := o1.Position; got != 1 {
 		t.Errorf("first old-engine place = %d, want 1", got)
 	}
-	if got := n1.State.Position; got != 1 {
+	if got := n1.Position; got != 1 {
 		t.Errorf("first new-engine place = %d, want 1 (it does not wait behind the old engine)", got)
 	}
-	if got := o2.State.Position; got != 2 {
+	if got := o2.Position; got != 2 {
 		t.Errorf("second old-engine place = %d, want 2", got)
 	}
 }
