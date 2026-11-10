@@ -21,6 +21,7 @@ type passwordChangeMock struct {
 	pb.AuthMutationClient
 
 	storedHash string
+	reads      int // GetUserById
 
 	casCalls  int
 	lastCAS   *pb.UpdateUserPasswordIfUnchangedReq
@@ -51,6 +52,7 @@ func (m *passwordChangeMock) RevokeOtherSessionTokens(ctx context.Context, in *p
 }
 
 func (m *passwordChangeMock) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
+	m.reads++
 	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId(), PasswordHash: m.storedHash}}, nil
 }
 
@@ -89,7 +91,7 @@ func TestChangePassword_WritesUnderTheVerifiedHash(t *testing.T) {
 	h, m := newPasswordChangeHandler(t, "correct-horse-battery-staple")
 	stored := m.storedHash
 
-	if _, err := h.ChangePassword(orgAuthedCtx("u1"), &pb.ChangePasswordReq{
+	if _, err := h.ChangePassword(sessionCallerCtx("u1", "t-session"), &pb.ChangePasswordReq{
 		CurrentPassword: "correct-horse-battery-staple",
 		NewPassword:     "a-different-long-password",
 	}); err != nil {
@@ -120,7 +122,7 @@ func TestChangePassword_RefusesWhenTheHashMovedUnderneath(t *testing.T) {
 	h, m := newPasswordChangeHandler(t, "correct-horse-battery-staple")
 	m.casErr = status.Error(codes.NotFound, "no rows")
 
-	_, err := h.ChangePassword(orgAuthedCtx("u1"), &pb.ChangePasswordReq{
+	_, err := h.ChangePassword(sessionCallerCtx("u1", "t-session"), &pb.ChangePasswordReq{
 		CurrentPassword: "correct-horse-battery-staple",
 		NewPassword:     "a-different-long-password",
 	})
@@ -141,7 +143,7 @@ func TestChangePassword_OtherWriteErrorsAreNotDisguised(t *testing.T) {
 	boom := status.Error(codes.Unavailable, "db down")
 	m.casErr = boom
 
-	_, err := h.ChangePassword(orgAuthedCtx("u1"), &pb.ChangePasswordReq{
+	_, err := h.ChangePassword(sessionCallerCtx("u1", "t-session"), &pb.ChangePasswordReq{
 		CurrentPassword: "correct-horse-battery-staple",
 		NewPassword:     "a-different-long-password",
 	})
@@ -157,7 +159,7 @@ func TestChangePassword_OtherWriteErrorsAreNotDisguised(t *testing.T) {
 func TestChangePassword_WrongCurrentPasswordWritesNothing(t *testing.T) {
 	h, m := newPasswordChangeHandler(t, "correct-horse-battery-staple")
 
-	_, err := h.ChangePassword(orgAuthedCtx("u1"), &pb.ChangePasswordReq{
+	_, err := h.ChangePassword(sessionCallerCtx("u1", "t-session"), &pb.ChangePasswordReq{
 		CurrentPassword: "not-the-password",
 		NewPassword:     "a-different-long-password",
 	})
@@ -189,17 +191,28 @@ func TestChangePassword_EndsEveryOtherSession(t *testing.T) {
 	if sw.GetUserId() != "u1" || sw.GetKeepTokenId() != "11111111-1111-4111-8111-111111111111" {
 		t.Errorf("sweep = %+v, want u1's sessions but the caller's own", sw)
 	}
+}
 
-	// An API-token caller has no session to keep: every session goes.
-	m.sweeps = nil
-	if _, err := h.ChangePassword(ctxWithEnvelope(t, "u1", ""), &pb.ChangePasswordReq{
+// An API token cannot change the password, even with the right current
+// password: like stepping up or minting a token, replacing the password (and
+// signing the person out everywhere) is the person's session's to do. It is
+// refused before the account is read, the guess budget spent or anything
+// written (password_change/session-only).
+func TestChangePassword_AnAPITokenCallerIsRefused(t *testing.T) {
+	h, m := newPasswordChangeHandler(t, "correct-horse-battery-staple")
+	_, err := h.ChangePassword(sessionCallerCtx("u1", ""), &pb.ChangePasswordReq{
 		CurrentPassword: "correct-horse-battery-staple",
-		NewPassword:     "a-third-long-password",
-	}); err != nil {
-		t.Fatalf("ChangePassword (API token): %v", err)
+		NewPassword:     "a-different-long-password",
+	})
+	if refusalCodeOf(err) != CodeSessionRequired || status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("an API-token caller: %v, want PermissionDenied / %s", err, CodeSessionRequired)
 	}
-	if len(m.sweeps) != 1 || m.sweeps[0].GetKeepTokenId() != nilUUID {
-		t.Errorf("an API-token caller kept a session: %+v", m.sweeps)
+	if m.casCalls != 0 || m.plainCall != 0 || len(m.sweeps) != 0 || m.spentLinksFor != "" {
+		t.Errorf("an API-token caller wrote something (cas=%d plain=%d sweeps=%d spent=%q)",
+			m.casCalls, m.plainCall, len(m.sweeps), m.spentLinksFor)
+	}
+	if m.reads != 0 {
+		t.Errorf("an API-token caller had the account read (%d reads): the refusal comes first", m.reads)
 	}
 }
 
@@ -221,7 +234,7 @@ func TestChangePassword_AFailedSignOutFailsTheChange(t *testing.T) {
 // is spent in the same unit of work.
 func TestChangePassword_SpendsTheAccountsResetLinks(t *testing.T) {
 	h, m := newPasswordChangeHandler(t, "correct-horse-battery-staple")
-	if _, err := h.ChangePassword(orgAuthedCtx("u1"), &pb.ChangePasswordReq{
+	if _, err := h.ChangePassword(sessionCallerCtx("u1", "t-session"), &pb.ChangePasswordReq{
 		CurrentPassword: "correct-horse-battery-staple",
 		NewPassword:     "a-different-long-password",
 	}); err != nil {
@@ -237,7 +250,7 @@ func TestChangePassword_SpendsTheAccountsResetLinks(t *testing.T) {
 func TestChangePassword_AFailedSpendFailsTheChange(t *testing.T) {
 	h, m := newPasswordChangeHandler(t, "correct-horse-battery-staple")
 	m.spendErr = status.Error(codes.Unavailable, "db down")
-	_, err := h.ChangePassword(orgAuthedCtx("u1"), &pb.ChangePasswordReq{
+	_, err := h.ChangePassword(sessionCallerCtx("u1", "t-session"), &pb.ChangePasswordReq{
 		CurrentPassword: "correct-horse-battery-staple",
 		NewPassword:     "a-different-long-password",
 	})
@@ -300,7 +313,7 @@ func TestChangePassword_HashesBeforeTheTransactionOpens(t *testing.T) {
 	tx := &recordingDistTx{}
 	h.DistTx, h.Connection = tx, "main"
 
-	if _, err := h.ChangePassword(orgAuthedCtx("u1"), &pb.ChangePasswordReq{
+	if _, err := h.ChangePassword(sessionCallerCtx("u1", "t-session"), &pb.ChangePasswordReq{
 		CurrentPassword: "correct-horse-battery-staple",
 		NewPassword:     "",
 	}); err == nil {
@@ -313,7 +326,7 @@ func TestChangePassword_HashesBeforeTheTransactionOpens(t *testing.T) {
 	// The control: a derivation that succeeds goes on to one committed
 	// transaction, so the assertion above is not met by a handler that never
 	// opens one.
-	if _, err := h.ChangePassword(orgAuthedCtx("u1"), &pb.ChangePasswordReq{
+	if _, err := h.ChangePassword(sessionCallerCtx("u1", "t-session"), &pb.ChangePasswordReq{
 		CurrentPassword: "correct-horse-battery-staple",
 		NewPassword:     "a-different-long-password",
 	}); err != nil {
@@ -383,7 +396,7 @@ func TestChangePassword_TheCurrentPasswordSpendsTheSignInBudget(t *testing.T) {
 	h.Mutation = b
 	h.SignInFailureBudget = 3
 	change := func(current string) error {
-		_, err := h.ChangePassword(orgAuthedCtx("u1"), &pb.ChangePasswordReq{CurrentPassword: current, NewPassword: "a-different-long-password"})
+		_, err := h.ChangePassword(sessionCallerCtx("u1", "t-session"), &pb.ChangePasswordReq{CurrentPassword: current, NewPassword: "a-different-long-password"})
 		return err
 	}
 	for i := range 3 {

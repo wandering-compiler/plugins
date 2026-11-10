@@ -434,11 +434,12 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 ### password_change
 
 - **Purpose.** An authenticated principal replaces its own password, proving the current one. No mail channel is needed.
-- **Adds.** Mutations `UpdateUserPasswordIfUnchanged` (compare-and-swap on the verified hash; it also stamps `User.device_trust_revoked_at`) and `RevokeOtherSessionTokens`. Service method `ChangePassword`. REST endpoint `POST /auth/password/change` (bearer).
+- **Adds.** Mutations `UpdateUserPasswordIfUnchanged` (compare-and-swap on the verified hash; it also stamps `User.device_trust_revoked_at`) and `RevokeOtherSessionTokens`. Service method `ChangePassword`. REST endpoint `POST /auth/password/change` (bearer; a session, not an API token).
 - **Requires / conflicts / combined files.** None. Default off.
 
 | id | invariant | category | proof |
 |---|---|---|---|
+| `password_change/session-only` | Only a session MAY change the password. An API-token caller MUST be refused (PermissionDenied, `SESSION_REQUIRED`) before the account is read, the guess budget is spent or anything is written: replacing the password and ending every other session is a decision about the person, not one of a narrowed token's permissions (the rule `step_up/session-only` and `CreateApiToken` follow). | Security | `TestChangePassword_AnAPITokenCallerIsRefused` |
 | `password_change/caller-only` | The account changed MUST be the authenticated principal's, read by user id. It MUST NOT be an address from the request. | Security | `TestChangePassword_WritesUnderTheVerifiedHash` |
 | `password_change/current-password-required` | A wrong current password MUST write nothing and end no session. | Security | `TestChangePassword_WrongCurrentPasswordWritesNothing` |
 | `password_change/compare-and-swap` | The write MUST apply only while the stored hash still equals the one just verified. A concurrent change MUST turn the later request into the wrong-password refusal. | Consistency & concurrency | `TestChangePassword_RefusesWhenTheHashMovedUnderneath`. **Unit (mock) only:** a live test would run two concurrent changes from one old password and assert one success, one refusal, and a final hash matching the winner. |
