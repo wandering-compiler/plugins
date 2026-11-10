@@ -204,8 +204,7 @@ func Run(ctx context.Context, cfg Config, onState func(State)) error {
 		if err == nil {
 			break
 		}
-		if errors.Is(err, ErrNeedsRegistration) || errors.Is(err, ErrInvalidClaim) ||
-			refusal.ReasonOf(err) != "" || ctx.Err() != nil {
+		if enrolmentFinal(err) || ctx.Err() != nil {
 			return err
 		}
 		onState(Disconnected)
@@ -246,6 +245,17 @@ func Run(ctx context.Context, cfg Config, onState func(State)) error {
 		case <-time.After(wait):
 		}
 	}
+}
+
+// enrolmentFinal reports whether an enrolment error is one no retry can fix:
+// no code, a claim the relay would refuse, or a reasoned refusal — except one
+// answered Unavailable (the relay holds no ban set yet), which the same code
+// gets past once a control plane has reached the relay.
+func enrolmentFinal(err error) bool {
+	if errors.Is(err, ErrNeedsRegistration) || errors.Is(err, ErrInvalidClaim) {
+		return true
+	}
+	return refusal.ReasonOf(err) != "" && status.Code(err) != codes.Unavailable
 }
 
 func attachOnce(ctx context.Context, cfg Config, onState func(State)) error {

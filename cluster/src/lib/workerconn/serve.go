@@ -176,10 +176,12 @@ func openTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), op
 		return nil, fmt.Errorf("workerconn: dialling the tunnel: %w", err)
 	}
 
-	// The work server is built with the cluster's keepalive and the MaxMessage
-	// cap first, and the caller's options after them, so a caller can add (a
-	// unary interceptor, its own limits) without having to repeat these — the
-	// relay's pings are only tolerated because this side permits them.
+	// The work server is built with the cluster's panic net, keepalive and the
+	// MaxMessage cap first, and the caller's options after them, so a caller
+	// can add (a unary interceptor, its own limits) without having to repeat
+	// these — the relay's pings are only tolerated because this side permits
+	// them, and a panic in the project's handler is answered Internal instead
+	// of ending the worker (tunnel.RecoverServerOptions).
 	srv := grpc.NewServer(append(tunnel.WorkServerOptions(), opts...)...)
 	register(srv)
 	lis := tunnel.NewSingleConnListener(conn)

@@ -17,6 +17,7 @@ import (
 	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
 	"github.com/wandering-compiler/plugins/cluster/lib/resowner"
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 )
 
 // ScheduleTask picks a relay and proxies its scheduling stream to the caller.
@@ -144,15 +145,15 @@ func (h *ClusterServiceHandler) closeCandidates(c candidates) {
 func (h *ClusterServiceHandler) placeable(ctx context.Context) (candidates, error) {
 	relays, err := h.Relays.ListEnabled(ctx)
 	if err != nil {
-		return candidates{}, status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err)
+		return candidates{}, grpcerr.ReplaySafe(status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err))
 	}
 	if len(relays) == 0 {
 		// Unavailable and not NotFound: the pool is EMPTY, which an operator
 		// fixes by registering or enabling a relay. NotFound would read as
 		// "you asked for something that does not exist", and the caller asked
 		// for nothing but capacity.
-		return candidates{}, refusal.New(codes.Unavailable, refusal.NoRelay,
-			"cluster: no enabled relay is registered — register one, or re-enable one that was turned off")
+		return candidates{}, grpcerr.ReplaySafe(refusal.New(codes.Unavailable, refusal.NoRelay,
+			"cluster: no enabled relay is registered — register one, or re-enable one that was turned off"))
 	}
 
 	// Rotated BEFORE the stable sort, so relays with equal load keep rotated
@@ -345,7 +346,7 @@ func (h *ClusterServiceHandler) DrainRelay(ctx context.Context, req *pb.DrainRel
 			return nil, status.Errorf(codes.NotFound, "cluster: no relay %q is registered", id)
 		}
 		if err != nil {
-			return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err)
+			return nil, grpcerr.ReplaySafe(status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err))
 		}
 		relays = append(relays, r)
 	}

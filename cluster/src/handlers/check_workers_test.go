@@ -29,6 +29,19 @@ type workerStore struct {
 	// versionCalls counts BanVersion reads.
 	versionCalls int
 	decisions    []decision
+	// missing are ids Exists reports absent; every other id exists.
+	missing map[string]bool
+	// existsErr fails every Exists.
+	existsErr error
+}
+
+func (w *workerStore) Exists(_ context.Context, id string) (bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.existsErr != nil {
+		return false, w.existsErr
+	}
+	return !w.missing[id], nil
 }
 
 type decision struct {
@@ -235,6 +248,36 @@ func TestBanWorkers_DeliversTheSetToEveryRelayAtOnce(t *testing.T) {
 	}
 	if reg.Admitted("bb") {
 		t.Error("the relay did not get the new ban set with the decision")
+	}
+}
+
+// Lifting the LAST ban sends an empty set, and an empty set is an answer, not
+// an absence: the empty w17-cluster-banned value must survive a real gRPC hop
+// (HTTP/2 framing, the relay's ban interceptor) and replace the set the relay
+// holds. Were it dropped on the way, the relay would read "no set sent", keep
+// {bb} and refuse the unbanned worker for good.
+func TestUnbanWorkers_TheEmptySetReachesTheRelay(t *testing.T) {
+	reg, dial := serveRelayWithWorkers(t, workeradmit.Worker{ID: "bb"})
+	ws := &workerStore{banned: []string{"bb"}, banVersion: 1}
+	h := &ClusterServiceHandler{
+		Relays:  &store{relays: []Relay{{ID: "1", Name: "edge", URL: "live"}}},
+		Workers: ws,
+		Dial:    dial,
+	}
+	if _, err := h.BanWorkers(signedIn("op-1"), &pb.DecideWorkersActionReq{Ids: []string{"w-bb"}}); err != nil {
+		t.Fatalf("BanWorkers: %v", err)
+	}
+	if reg.Admitted("bb") {
+		t.Fatal("the relay did not get the ban")
+	}
+	ws.mu.Lock()
+	ws.banned, ws.banVersion = nil, 2
+	ws.mu.Unlock()
+	if _, err := h.UnbanWorkers(signedIn("op-1"), &pb.DecideWorkersActionReq{Ids: []string{"w-bb"}}); err != nil {
+		t.Fatalf("UnbanWorkers: %v", err)
+	}
+	if !reg.Admitted("bb") {
+		t.Error("the relay still bans bb after the last ban was lifted — the empty set did not arrive")
 	}
 }
 

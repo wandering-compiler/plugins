@@ -20,6 +20,7 @@ import (
 	"github.com/wandering-compiler/plugins/cluster/lib/relaydial"
 	"github.com/wandering-compiler/plugins/cluster/lib/resowner"
 	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 )
 
 // scripted is a relay whose every answer a test writes. Nil hooks answer like
@@ -241,6 +242,22 @@ func TestReserveTask_TheCallerLeavingStopsTheSearch(t *testing.T) {
 	}
 }
 
+// An empty pool is answered before any relay is asked: replay-safe. NO_RELAY
+// after relays were tried is NOT — relays were called and their rows noted —
+// so a w17 client returns it to its caller instead of replaying the placement.
+func TestHandlers_OnlyAnswersBeforeAnySideEffectAreReplaySafe(t *testing.T) {
+	empty := &ClusterServiceHandler{Relays: &store{}, Workers: &workerStore{}}
+	_, err := empty.ReserveTask(t.Context(), &pb.ReserveTaskReq{})
+	if refusal.ReasonOf(err) != refusal.NoRelay || !grpcerr.IsReplaySafe(err) {
+		t.Errorf("an empty pool: %v (reason %q, replay-safe %v), want a replay-safe NO_RELAY", err, refusal.ReasonOf(err), grpcerr.IsReplaySafe(err))
+	}
+	h, _ := pool(t, map[string]*scripted{}, "")
+	_, err = h.ReserveTask(t.Context(), &pb.ReserveTaskReq{})
+	if refusal.ReasonOf(err) != refusal.NoRelay || grpcerr.IsReplaySafe(err) {
+		t.Errorf("no relay after trying them: %v (replay-safe %v), want NO_RELAY not marked", err, grpcerr.IsReplaySafe(err))
+	}
+}
+
 // failingStore is a registry that cannot be read.
 type failingStore struct{ err error }
 
@@ -274,8 +291,13 @@ func TestHandlers_AnUnreadableRegistryIsUnavailable(t *testing.T) {
 		},
 		"CheckWorkers": func() error { _, err := h.CheckWorkers(ctx, &pb.CheckWorkersReq{}); return err },
 	} {
-		if err := call(); status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), "registry") {
+		err := call()
+		if status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), "registry") {
 			t.Errorf("%s with the registry down: %v, want Unavailable naming the registry", name, err)
+		}
+		// Read before anything was done: a w17 client may send it again.
+		if !grpcerr.IsReplaySafe(err) {
+			t.Errorf("%s with the registry down: not marked replay-safe", name)
 		}
 	}
 }
@@ -303,8 +325,12 @@ func TestHandlers_AnUnreadableBanSetRefusesEveryCall(t *testing.T) {
 			return err
 		},
 	} {
-		if err := call(); status.Code(err) != codes.Unavailable {
+		err := call()
+		if status.Code(err) != codes.Unavailable {
 			t.Errorf("%s with an unreadable ban set: %v, want Unavailable", name, err)
+		}
+		if !grpcerr.IsReplaySafe(err) {
+			t.Errorf("%s with an unreadable ban set: not marked replay-safe", name)
 		}
 	}
 	if r.reserves.Load()+r.drains.Load()+r.cancels.Load() != 0 {
@@ -706,6 +732,27 @@ func TestDecideWorkers_EmptySelectionAndRefusedDecision(t *testing.T) {
 	h.Workers = decideFails{&workerStore{}}
 	if _, err := h.BanWorkers(signedIn("op-1"), &pb.DecideWorkersActionReq{Ids: []string{"w-1"}}); status.Code(err) != codes.FailedPrecondition {
 		t.Errorf("a refused ban: %v, want the registry's refusal", err)
+	}
+}
+
+// A selection with an id the registry does not hold decides NOTHING and says
+// which id: the UPDATE matched no row for it, and the operator was told the
+// whole selection was banned. Every id is resolved before the write, so a
+// stale id among good ones bans none of them; a registry that cannot be read
+// refuses the decision too.
+func TestDecideWorkers_AStaleIDDecidesNothing(t *testing.T) {
+	ws := &workerStore{missing: map[string]bool{"w-gone": true}}
+	h := &ClusterServiceHandler{Workers: ws}
+	_, err := h.BanWorkers(signedIn("op-1"), &pb.DecideWorkersActionReq{Ids: []string{"w-1", "w-gone", "w-2"}})
+	if status.Code(err) != codes.NotFound || !strings.Contains(err.Error(), `"w-gone"`) {
+		t.Fatalf("a stale id: %v, want NotFound naming it", err)
+	}
+	if len(ws.decisions) != 0 {
+		t.Errorf("decided %+v with a stale id in the selection", ws.decisions)
+	}
+	ws.existsErr = status.Error(codes.Unavailable, "db down")
+	if _, err := h.UnbanWorkers(signedIn("op-1"), &pb.DecideWorkersActionReq{Ids: []string{"w-1"}}); status.Code(err) != codes.Unavailable || !grpcerr.IsReplaySafe(err) || len(ws.decisions) != 0 {
+		t.Errorf("an unreadable registry: %v (decisions %+v), want a replay-safe Unavailable and nothing decided", err, ws.decisions)
 	}
 }
 

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -156,7 +157,7 @@ func (s workerRegistry) Decide(ctx context.Context, ids []string, ban bool, by s
 		return err
 	}
 	if t := v.GetVersion(); t != nil && !at.After(t.AsTime()) {
-		at = t.AsTime().Add(time.Millisecond)
+		at = pastNewestDecision(t.AsTime())
 	}
 	req := &pb.DecideWorkersReq{Ids: ids, DecidedBy: by, At: timestamppb.New(at)}
 	if ban {
@@ -165,6 +166,34 @@ func (s workerRegistry) Decide(ctx context.Context, ids []string, ban bool, by s
 		_, err = s.m.UnbanWorkers(ctx, req)
 	}
 	return err
+}
+
+// pastNewestDecision is a decision time just past the newest one: 1 ms plus a
+// random whole number of microseconds below a millisecond (the column keeps
+// microseconds). Two replicas that both lag the newest decision read the same
+// newest time; moved by exactly 1 ms they recorded the SAME version, and a
+// relay applies a set at an equal version — so the set one of them read
+// between the two commits (missing the other's ban) could replace the newer
+// one until the next delivery. The random part makes that collision a 1 in
+// 1000 event instead of a certainty; a collision that still happens heals at
+// the next set any replica sends (cluster SPEC, bans gap).
+func pastNewestDecision(newest time.Time) time.Time {
+	return newest.Truncate(time.Microsecond).
+		Add(time.Millisecond + time.Duration(rand.IntN(1000))*time.Microsecond)
+}
+
+func (s workerRegistry) Exists(ctx context.Context, id string) (bool, error) {
+	w, err := s.q.GetWorker(ctx, &pb.GetWorkerReq{Id: id})
+	switch status.Code(err) {
+	case codes.OK:
+		// An empty row is a single-row read that matched nothing (see
+		// relayStore.Get).
+		return w.GetId() != "", nil
+	case codes.NotFound, codes.InvalidArgument:
+		// InvalidArgument: not a well-formed id, so no row has it.
+		return false, nil
+	}
+	return false, err
 }
 
 func (s workerRegistry) EnrolledCount(ctx context.Context) (int, error) {

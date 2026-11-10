@@ -212,6 +212,31 @@ func TestFinalText_AFailedHookIsSkipped(t *testing.T) {
 	}
 }
 
+// A filter that answers no response and no error (an early return on a path
+// it did not mean to take) is skipped and logged like a failed one: the paid
+// answer is kept, not replaced by "". An explicit empty text is the filter's
+// answer and stands.
+func TestFinalText_ANilResponseIsSkippedAnEmptyTextStands(t *testing.T) {
+	none := func(context.Context, *pb.TextFilterReq) (*pb.TextFilterResp, error) { return nil, nil }
+	empty := func(context.Context, *pb.TextFilterReq) (*pb.TextFilterResp, error) {
+		return &pb.TextFilterResp{Text: ""}, nil
+	}
+	for name, tc := range map[string]struct {
+		hook TextFilterHook
+		want string
+	}{
+		"nil response": {none, "Hotovo."},
+		"empty text":   {empty, ""},
+	} {
+		h := &AgentServiceHandler{Client: &fakeCompleter{res: textResponse(t, "Hotovo.")}, DefaultModel: "m", DefaultMaxTokens: 100,
+			FinalText: FinalTextFilters{Hooks: []TextFilterHook{tc.hook}}}
+		resp, err := h.Complete(context.Background(), &pb.CompleteReq{})
+		if err != nil || resp.GetText() != tc.want {
+			t.Errorf("%s: %q, %v; want %q", name, resp.GetText(), err, tc.want)
+		}
+	}
+}
+
 // raw skips the project's filters as well as the built-in ones.
 func TestFinalText_RawSkipsTheHooks(t *testing.T) {
 	called := false
@@ -223,5 +248,28 @@ func TestFinalText_RawSkipsTheHooks(t *testing.T) {
 	resp, err := h.Complete(context.Background(), &pb.CompleteReq{FinalText: &pb.FinalText{Raw: true}})
 	if err != nil || resp.GetText() != leaked || called {
 		t.Fatalf("raw: %q, %v, hook called %v", resp.GetText(), err, called)
+	}
+}
+
+// text_filter_timeout_seconds <= 0 gives a hook the call's own deadline and no
+// other; a positive one bounds each hook on its own.
+func TestFinalText_ANonPositiveHookTimeoutIsTheCallsDeadline(t *testing.T) {
+	callDeadline := time.Now().Add(time.Hour)
+	ctx, cancel := context.WithDeadline(context.Background(), callDeadline)
+	defer cancel()
+	var seen time.Time
+	hook := func(ctx context.Context, req *pb.TextFilterReq) (*pb.TextFilterResp, error) {
+		seen, _ = ctx.Deadline()
+		return &pb.TextFilterResp{Text: req.GetText()}, nil
+	}
+	for _, timeout := range []time.Duration{0, -time.Second} {
+		finalTextRun{hooks: []TextFilterHook{hook}, timeout: timeout}.apply(ctx, "x", textOrigin{})
+		if !seen.Equal(callDeadline) {
+			t.Errorf("timeout %v: the hook's deadline is %v, want the call's %v", timeout, seen, callDeadline)
+		}
+	}
+	finalTextRun{hooks: []TextFilterHook{hook}, timeout: time.Second}.apply(ctx, "x", textOrigin{})
+	if !seen.Before(callDeadline) || time.Until(seen) > time.Second {
+		t.Errorf("timeout 1s: the hook's deadline is %v, want about a second from now", seen)
 	}
 }

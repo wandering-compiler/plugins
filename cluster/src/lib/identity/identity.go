@@ -105,11 +105,16 @@ func LoadOrCreateIdentity(dir, name string) (Identity, error) {
 	// The key is written 0600 and the directory 0700. Nothing here protects
 	// against a reader who is already root; it protects against the ordinary
 	// case of another account on a shared box.
-	if err := os.WriteFile(keyPath, id.KeyPEM, 0o600); err != nil {
-		return Identity{}, fmt.Errorf("identity: writing %s: %w", keyPath, err)
+	//
+	// Each file is written whole or not at all (temp file, sync, rename), key
+	// first: a crash leaves nothing, a whole key alone (refused above as
+	// half-written, and never pinned, since its fingerprint was never
+	// printed), or the pair — never a truncated key beside a certificate.
+	if err := writeAtomic(keyPath, id.KeyPEM, 0o600); err != nil {
+		return Identity{}, err
 	}
-	if err := os.WriteFile(certPath, id.CertPEM, 0o644); err != nil {
-		return Identity{}, fmt.Errorf("identity: writing %s: %w", certPath, err)
+	if err := writeAtomic(certPath, id.CertPEM, 0o644); err != nil {
+		return Identity{}, err
 	}
 	return id, nil
 }
