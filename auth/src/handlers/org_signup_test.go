@@ -32,6 +32,10 @@ func (m *hostMock) ListOrgScopedRoles(context.Context, *pb.ListOrgScopedRolesReq
 	return out, nil
 }
 
+func (m *hostMock) ListRoleGrants(context.Context, *pb.ListRoleGrantsReq, ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
+	return &pb.ListRoleGrantsResp{Grants: m.roleGrants}, nil
+}
+
 func (m *hostMock) ListRoles(context.Context, *pb.ListRolesReq, ...grpc.CallOption) (*pb.ListRolesResp, error) {
 	return &pb.ListRolesResp{}, nil
 }
@@ -65,7 +69,18 @@ func signupFixture() *hostMock {
 		{Kind: "staff", Open: false},
 	}}
 	m.roles = []*pb.OrgRoleRow{{Id: "role-member", Name: "member"}, {Id: "role-admin", Name: "org-admin"}}
+	// member carries the list method; org-admin is the organization's wildcard.
+	m.roleGrants = []*pb.RoleGrant{{RoleId: "role-member", PermissionIds: []int32{3}}, {RoleId: "role-admin", AllPermissions: true}}
 	return m
+}
+
+// signupPolicyLock allocates the three policy methods and one more, so the
+// wildcard carries something the policy operator does not hold.
+func signupPolicyLock() *acllock.Lock {
+	return &acllock.Lock{Permissions: map[string]int{
+		"AUTH_AUTH_SERVICE_SET_ORG_SIGN_UP_POLICY": 1, "AUTH_AUTH_SERVICE_CLEAR_ORG_SIGN_UP_POLICY": 2, "AUTH_AUTH_SERVICE_LIST_ORG_SIGN_UP_POLICIES": 3,
+		"AUTH_AUTH_SERVICE_INVITE_TO_ORG_ADMIN": 4,
+	}}
 }
 
 // registrationVia is a registration's context as an audience gateway leaves
@@ -161,20 +176,21 @@ func TestWriteSignUpJoin(t *testing.T) {
 	if err := writeSignUpJoin(context.Background(), h, "u-new", &orgJoin{orgID: "org-acme", kind: "client", role: "retired"}); err == nil {
 		t.Error("a role gone from the catalogue was written")
 	}
+	if len(m.joined) != 1 || len(m.granted) != 1 {
+		t.Errorf("a registration whose policy role was retired since wrote a membership or a grant (no fallback): joined %v, granted %v", m.joined, m.granted)
+	}
 }
 
 // The backoffice sets policies realm-wide; a policy needs a kind (memberships
 // have kinds here), an open one a role the organization can hand out.
 func TestSetOrgSignUpPolicy(t *testing.T) {
 	m := signupFixture()
-	h := &AuthServiceHandler{Query: m, Mutation: m, Lock: &acllock.Lock{Permissions: map[string]int{
-		"AUTH_AUTH_SERVICE_SET_ORG_SIGN_UP_POLICY": 1, "AUTH_AUTH_SERVICE_CLEAR_ORG_SIGN_UP_POLICY": 2, "AUTH_AUTH_SERVICE_LIST_ORG_SIGN_UP_POLICIES": 3,
-	}}}
+	h := &AuthServiceHandler{Query: m, Mutation: m, Lock: signupPolicyLock()}
 	inOrg := whoAmICtx("admin", "org-acme")
 	if _, err := h.SetOrgSignUpPolicy(inOrg, &pb.SetOrgSignUpPolicyReq{OrgId: "org-acme", Kind: "client", Open: true, Role: "member"}); refusalCodeOf(err) != CodeSignUpPoliciesRealmOnly {
 		t.Errorf("from inside an organization: %v", err)
 	}
-	realm := whoAmICtx("ops", "")
+	realm := withHeldPermissions(whoAmICtx("ops", ""), "ops", 1, 2, 3)
 	for name, req := range map[string]*pb.SetOrgSignUpPolicyReq{
 		"no kind":           {OrgId: "org-acme", Open: true, Role: "member"},
 		"open without role": {OrgId: "org-acme", Kind: "client", Open: true},
@@ -200,6 +216,44 @@ func TestSetOrgSignUpPolicy(t *testing.T) {
 	resp, err := h.ListOrgSignUpPolicies(realm, &pb.ListOrgSignUpPoliciesReq{OrgId: "org-acme"})
 	if err != nil || len(resp.GetPolicies()) != 2 {
 		t.Errorf("list: %v, %v", resp, err)
+	}
+}
+
+// An open policy's role is held to the role ceiling of the operator who sets
+// it, as every other grant path is: the registration grants it later with no
+// ceiling of its own (the registrant holds nothing), so the policy is where
+// the grant is authorised. An operator who holds the policy methods but not
+// everything the organization's wildcard carries cannot open registration
+// with it; one who holds everything can.
+func TestSetOrgSignUpPolicy_HoldsTheRoleToTheCallersCeiling(t *testing.T) {
+	m := signupFixture()
+	h := &AuthServiceHandler{Query: m, Mutation: m, Lock: signupPolicyLock()}
+	ops := withHeldPermissions(whoAmICtx("ops", ""), "ops", 1, 2, 3)
+
+	_, err := h.SetOrgSignUpPolicy(ops, &pb.SetOrgSignUpPolicyReq{OrgId: "org-acme", Kind: "client", Open: true, Role: "org-admin"})
+	if refusalCodeOf(err) != CodeRoleAboveCaller {
+		t.Errorf("an open policy granting the organization's wildcard, set by an operator who does not hold it: %v, want %s", err, CodeRoleAboveCaller)
+	}
+	if len(m.policySet) != 0 || len(m.policyEnded) != 0 {
+		t.Fatalf("a policy above the operator's ceiling was written: set %v, ended %v", m.policySet, m.policyEnded)
+	}
+	// No resolved permissions (a call past the gateway): fails closed.
+	if _, err := h.SetOrgSignUpPolicy(whoAmICtx("ops", ""), &pb.SetOrgSignUpPolicyReq{OrgId: "org-acme", Kind: "client", Open: true, Role: "member"}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("no resolved permissions: %v, want PermissionDenied", err)
+	}
+	// A closed policy grants nothing, so it has nothing to hold to a ceiling.
+	if _, err := h.SetOrgSignUpPolicy(ops, &pb.SetOrgSignUpPolicyReq{OrgId: "org-acme", Kind: "staff", Role: "org-admin"}); err != nil {
+		t.Errorf("a closed policy: %v", err)
+	}
+	if _, err := h.SetOrgSignUpPolicy(ops, &pb.SetOrgSignUpPolicyReq{OrgId: "org-acme", Kind: "client", Open: true, Role: "member"}); err != nil {
+		t.Errorf("a role within the operator's ceiling: %v", err)
+	}
+	all := withHeldPermissions(whoAmICtx("root", ""), "root", 1, 2, 3, 4)
+	if _, err := h.SetOrgSignUpPolicy(all, &pb.SetOrgSignUpPolicyReq{OrgId: "org-acme", Kind: "client", Open: true, Role: "org-admin"}); err != nil {
+		t.Errorf("an operator holding everything the wildcard carries: %v", err)
+	}
+	if !slices.Equal(m.policySet, []string{"org-acme/staff/false/", "org-acme/client/true/member", "org-acme/client/true/org-admin"}) {
+		t.Errorf("written %v", m.policySet)
 	}
 }
 
