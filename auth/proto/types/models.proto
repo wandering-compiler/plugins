@@ -984,7 +984,7 @@ message UserRecoveryCode {
 
   string id        = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string user_id   = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { fk: "@module.User", deletion_rule: BLOCK, index: true }];
-  string code_hash = 3 [(w17.field) = { type: CHAR, max_len: 64 }]; // hex sha256 of the normalised code
+  string code_hash = 3 [(w17.field) = { type: CHAR, max_len: 64 }]; // hex argon2id of the normalised code, salted by the account (a set made before: hex sha256)
   google.protobuf.Timestamp used_at    = 4 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp created_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
   // revoked_at — the set this code belongs to was replaced, or the

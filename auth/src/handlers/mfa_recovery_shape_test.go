@@ -38,11 +38,12 @@ func TestAcceptRecoveryCode_AWrongShapeIsRefusedWithoutALookup(t *testing.T) {
 	}
 
 	// The control: a recovery-shaped code, typed any way a person types it,
-	// is looked up — once each.
+	// is looked up — twice when it misses: as the slow hash, then as the
+	// SHA-256 a set made before the slow hash was stored with.
 	for _, code := range []string{"abcde-fghjk", "ABCDE FGHJK", "abcdefghjk"} {
 		h.acceptRecoveryCode(context.Background(), "u1", code)
 	}
-	if c.calls != 3 {
-		t.Errorf("%d lookups for three recovery-shaped codes, want 3", c.calls)
+	if c.calls != 6 {
+		t.Errorf("%d lookups for three recovery-shaped codes that miss, want 6 (both forms each)", c.calls)
 	}
 }

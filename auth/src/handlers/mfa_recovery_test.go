@@ -112,7 +112,7 @@ func TestConfirmTotp_HandsOutTenRecoveryCodesStoredHashed(t *testing.T) {
 		if _, plain := m.recovery[normaliseRecoveryCode(c)]; plain {
 			t.Errorf("recovery code %q is stored in the clear", c)
 		}
-		if _, ok := m.recovery[recoveryCodeHash(normaliseRecoveryCode(c))]; !ok {
+		if _, ok := m.recovery[recoveryCodeHash("u1", normaliseRecoveryCode(c))]; !ok {
 			t.Errorf("recovery code %q is not stored", c)
 		}
 	}
@@ -351,5 +351,52 @@ func TestStepUp_ARecoveryCodeNeedsNoSeed(t *testing.T) {
 	h.TwoFactorSecretKey = ""
 	if _, err := h.EnrollTotp(ctx, &pb.EnrollTotpReq{Code: rc[0]}); err != nil {
 		t.Errorf("a recovery code could not replace an authenticator whose seed is unreadable: %v", err)
+	}
+}
+
+// two_factor/recovery-codes-slow-hash: a recovery code is ~2^49.5 and lives
+// until used, so a plain digest of it would be cracked offline from a read of
+// the table in hours. It is stored as an argon2id hash salted by the account:
+// not the SHA-256 of the code, different for the same code in two accounts,
+// and as slow per guess as a password hash.
+func TestRecoveryCodeHash_IsSlowAndSaltedByTheAccount(t *testing.T) {
+	const code = "abcdefghjk"
+	a, b := recoveryCodeHash("u1", code), recoveryCodeHash("u2", code)
+	if a == legacyRecoveryCodeHash(code) {
+		t.Fatal("a recovery code is stored as its plain SHA-256")
+	}
+	if a == b {
+		t.Error("the same code hashes the same in two accounts: one guess tests every account")
+	}
+	if a != recoveryCodeHash("u1", code) {
+		t.Error("the hash is not deterministic for one account: the consuming UPDATE could never match it")
+	}
+	if len(a) != 64 {
+		t.Errorf("hash length %d, want 64 (the column is CHAR(64))", len(a))
+	}
+	if ok, _ := regexp.MatchString(`^[0-9a-f]{64}$`, a); !ok {
+		t.Errorf("hash %q is not lower-case hex", a)
+	}
+}
+
+// A set made before the slow hash is stored as the SHA-256 of each code. Those
+// codes keep working — once each — without a migration of the rows: a code
+// the slow hash does not find is tried as the legacy digest. A new set is
+// stored with the slow hash only.
+func TestAcceptRecoveryCode_ALegacySetStillSignsInOnce(t *testing.T) {
+	m := &mfaMock{userEmail: "a@b.c"}
+	h := newMfaHandler(m)
+	ctx := ctxWithCaller("u1")
+	enrolled(t, h, ctx)
+	m.recovery = map[string]bool{legacyRecoveryCodeHash("abcdefghjk"): false}
+
+	if !h.acceptRecoveryCode(ctx, "u1", "ABCDE-FGHJK") {
+		t.Fatal("a code of a set stored before the slow hash was refused")
+	}
+	if h.acceptRecoveryCode(ctx, "u1", "abcde-fghjk") {
+		t.Error("a legacy code was accepted twice")
+	}
+	if h.acceptRecoveryCode(ctx, "u1", "zzzzz-zzzzz") {
+		t.Error("a code that is in neither form was accepted")
 	}
 }

@@ -241,3 +241,22 @@ func TestVerifiable(t *testing.T) {
 		}
 	}
 }
+
+// FixedArgon2idHex is deterministic, salted and 64 hex characters, and its
+// parameters do not move: a pinned vector, so a change to them (which orphans
+// every stored value) fails here first.
+func TestFixedArgon2idHex(t *testing.T) {
+	a := FixedArgon2idHex("abcdefghjk", []byte("0123456789abcdef"))
+	if a != FixedArgon2idHex("abcdefghjk", []byte("0123456789abcdef")) {
+		t.Fatal("not deterministic")
+	}
+	if a == FixedArgon2idHex("abcdefghjk", []byte("fedcba9876543210")) {
+		t.Error("the salt changes nothing")
+	}
+	if len(a) != 64 {
+		t.Errorf("length %d, want 64", len(a))
+	}
+	if want := "300a968805c946e4a7ddc430438ffb7167682d1a2d768dc782d07207dd687860"; a != want {
+		t.Errorf("FixedArgon2idHex moved: %s, pinned %s — every stored value would stop matching", a, want)
+	}
+}
