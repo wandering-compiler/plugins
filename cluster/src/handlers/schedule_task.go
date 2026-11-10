@@ -110,7 +110,7 @@ func fallsThrough(err error) bool {
 	}
 	switch refusal.ReasonOf(err) {
 	case refusal.RelayDraining, refusal.RelayMisconfigured, refusal.QueueFull,
-		refusal.CallerQueueFull, refusal.BanSetNeeded:
+		refusal.CallerQueueFull, refusal.BanSetNeeded, refusal.EngineNotCarried:
 		return true
 	}
 	return false

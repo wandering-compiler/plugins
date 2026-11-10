@@ -23,12 +23,21 @@ import (
 // (resowner.Header), and only a poll or cancel carrying the same owner reaches
 // it. The response header confirms that, so a control plane can tell this
 // relay from one too old to bind.
-func (s *Server) ReserveTask(ctx context.Context, _ *pb.ReserveTaskReq) (*pb.ReservationState, error) {
+//
+// A reservation naming an engine is refused while the workers attached here
+// all run other engines (Backends.Carries): the control plane falls through
+// to a relay whose fleet runs it, instead of a grant nobody here can serve.
+func (s *Server) ReserveTask(ctx context.Context, req *pb.ReserveTaskReq) (*pb.ReservationState, error) {
 	if err := s.misconfigured(); err != nil {
 		return nil, err
 	}
+	engine := req.GetEngine()
+	if engine != "" && s.Backends != nil && !s.Backends.Carries(engine) {
+		return nil, refusal.New(codes.Unavailable, refusal.EngineNotCarried,
+			"relay: no worker attached here runs engine "+engine+" — place elsewhere")
+	}
 	owner := resowner.From(ctx)
-	r, err := s.Pool.Reserve(owner)
+	r, err := s.Pool.ReserveEngine(owner, engine)
 	if errors.Is(err, relaycore.ErrDraining) {
 		return nil, refusal.New(codes.Unavailable, refusal.RelayDraining, "relay: draining — place elsewhere")
 	}

@@ -146,6 +146,14 @@ message AttachReq {
   // draining or already wedged would be handed work for as long as it took its
   // first status to arrive.
   WorkerStatus.Readiness readiness = 4;
+
+  // The engines this machine runs — opaque names the pool's user defines
+  // (ReserveTaskReq.engine), for a codegen pool the engine versions. A
+  // reservation naming an engine goes only to a worker that lists it.
+  //
+  // EMPTY means the worker predates engines, or runs one it does not name:
+  // it takes any reservation, exactly as before the field existed.
+  repeated string engines = 5;
 }
 
 // WorkerStatus is a worker changing its mind about taking work.
