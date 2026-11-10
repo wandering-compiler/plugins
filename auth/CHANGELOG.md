@@ -1,5 +1,141 @@
 # auth — changelog
 
+## 0.1.0-rc.59
+
+### Accepting an invitation takes a session (read first)
+
+Behaviour change. `AcceptOrgInvite` and `AcceptMyOrgInvite` now refuse an API-token
+caller (`PermissionDenied` / `SESSION_REQUIRED`) before anything is read: joining an
+organization changes what the person holds, which only their session may do. A
+client that accepted invitations with an API token must call from a signed-in session.
+
+### ChangePassword takes a session only (read first)
+
+Behaviour change. `ChangePassword` (`POST /auth/password/change`) now refuses an
+API-token caller with `PermissionDenied` / `SESSION_REQUIRED` before the account is
+read, the guess budget spent or anything written, as `ConfirmPassword`,
+`CreateApiToken` and the API-token management methods already do. Before, a token
+holder who also knew the password could replace it and sign the person out of every
+session. A client that changed passwords through an API token must call it from a
+signed-in session instead.
+
+### Retiring a wildcard role no longer strands its holders (read first)
+
+Behaviour change. `AuthMutation.DeleteRole` — the admin Roles page's delete — now
+refuses to retire a live wildcard role (`all_permissions`) while one of its live
+holders holds no live grant of another live wildcard role (`LAST_ADMIN_ROLE`,
+FailedPrecondition; nothing is revoked). Before, retiring the wildcard preset
+revoked every superadmin's grant in one click and nothing in the product could
+give one back. To retire a wildcard its holders rely on, grant them the
+replacement first. Every other role, and a wildcard nobody relies on alone,
+retires as before. The statement gains two operations (a lock on the live
+wildcard rows and the guard), so a project picks the change up by regenerating
+its storage from this release.
+
+### An OAuth sign-in reports a store outage instead of reading it as "no account"
+
+The OAuth callback and exchange took any failed `GetOAuthIdentity` /
+`GetUserByEmail` read as "no row", and went on to link the identity to the
+address's account or to create one. Only NotFound means "no row" now; any other
+failure answers `UNAVAILABLE` / `AUTH_UNAVAILABLE`.
+
+### README: switching the authenticator off under `required` needs a code channel
+
+No behaviour change. The README and the `two_factor_totp` description now say that
+`two_factor_totp=false` with `two_factor_policy=required` makes a hand-written
+`MfaChallengeRequested` subscriber the only way any account signs in, and that the
+boot cannot check for one (two_factor gap 7).
+
+### A read-only method's outage is sent again by a w17 client
+
+With an SDK whose servers stop w17 clients replaying a handler's `UNAVAILABLE`
+(`grpcerr.AnsweredHeader`), every auth method that writes nothing — `Authenticate`,
+`AuthenticateAdmin`, `ResolveUser`, `WhoAmI` and the `Get…`/`List…` methods — marks
+its outage replay-safe (`grpcerr.ReplaySafe`), so a client still retries it. Methods
+that write (sign-in, sign-up, every change) answer an outage once. Needs the SDK
+release that adds `grpcerr.ReplaySafe`.
+
+### Recovery codes are stored as a slow hash
+
+A recovery code is now stored as argon2id of the code, salted by the account,
+instead of its plain SHA-256: a read of the `UserRecoveryCode` table (a backup, a
+replica) no longer lets the unused codes be searched offline in hours. Sets made
+before keep working, each code once, with no data migration and no schema change; a
+person who generates a new set (`GenerateRecoveryCodes`) moves to the slow hash. A
+recovery-shaped code that matches nothing now costs two lookups (the slow hash,
+then the old digest).
+
+### Redefining an organization's product role is held to the role as it is
+
+`DefineOrgProductRole` on a live key checked the ceiling against the new
+permissions only, so a caller could narrow a role and take from every holder a
+permission the caller does not hold. The live role must now be covered too (as
+`RetireOrgProductRole` requires); otherwise `PRODUCT_ROLE_ABOVE_CALLER`.
+
+### A password reset that sends no link is logged
+
+`RequestPasswordReset` still answers the same success for every address, but a
+link that fails to mint (store, sealing or event bus failure) and an account
+lookup that fails with anything but NotFound are now logged at ERROR (with the
+user id where known, never the address). Before, an outage answered every request
+with success and nothing reported that no link went out. The SPEC's reset rows now
+describe the fixed behaviour (the token sweep inside the reset's transaction).
+
+### A sign-in to an account without a usable password costs a verify
+
+`SignIn` for an account whose stored hash no algorithm verifies (a machine
+account's or an erased account's `!` sentinel) now runs the same throwaway
+password verification an unknown address does, so the response time no longer
+tells a machine account's address apart. The answer is unchanged. New:
+`passwordhash.Verifiable`.
+
+### An open registration policy's role is held to the role ceiling (read first)
+
+Behaviour change. `SetOrgSignUpPolicy` (`PUT /auth/admin/orgs/{org_id}/signup-policies`)
+now refuses an open policy whose role carries a permission the operator setting it
+does not hold (`ROLE_ABOVE_CALLER`, 403), as an invitation, a membership role change
+and a bot's roles already are; a request with no resolved permissions is refused.
+Before, any operator allowed to call it could open registration with any role of the
+organization's catalogue, the organization's wildcard included, and every
+registration on the host was granted it. Policies already set are not re-checked:
+review the live policies (`GET …/signup-policies`) and re-set any whose role the
+operator who set it could not hand out. A registration whose policy role has been
+retired since is refused (no membership, no grant) and never falls back to another
+role.
+
+### An open registration policy holds its role to what it was checked with
+
+A migration: `OrgSignUpPolicy` gains `role_snapshot` (TEXT, default `''`).
+`SetOrgSignUpPolicy` now stores an open policy's role as the role ceiling saw it
+when the operator set it, and every registration the policy admits holds the role
+to that snapshot, under the organization's lock, as accepting an invitation does.
+A role widened since the policy was set (`UpdateOrgRole`, or a redeploy that
+re-seeds a preset role with more permissions), another role now answering to the
+name, or a kind no longer open when a parked registration is confirmed refuses the
+registration (`SIGNUP_POLICY_STALE`, 412) and writes no membership and no grant —
+it is never granted the wider role. After widening a policy's role on purpose, set
+the policy again.
+
+A policy without a snapshot — seeded by fixtures, or set before this release — keeps
+working: its first registration pins the role as it reads then, and the role is held
+to that from the next registration on. Nothing has to be re-set after upgrading.
+
+### SPEC covers backoffice_invites, DisallowOrgProducts and every feature
+
+No behaviour change. `SPEC.md` now specifies `backoffice_invites` (`InviteToOrgAdmin`,
+`RevokeOrgInvites`, `/auth/admin/invites`, the OrgInvites page) and the bulk
+`DisallowOrgProducts`, lists every feature of the manifest in its Features table with
+the right requirements, and names the release it covers. The proofs of the
+confirmation-time invite gate, the machine-account label and the one bootstrap
+administrator per deployment are back in the test suite.
+
+### SPEC: the device revocation rows name the statement as it is
+
+No behaviour change. The devices rows said the "approved" op of `RevokeDeviceTokens`
+ends session tokens only; it ends the sessions and the `oauth_server` MCP access
+tokens the revoked device approved (`token_type IN (1, 3)`), never API tokens. The
+Features table listed `two_factor_enrolment` twice.
+
 ## 0.1.0-rc.58
 
 ### An organization's email proof, on every way in
