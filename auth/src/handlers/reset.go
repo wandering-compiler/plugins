@@ -5,6 +5,7 @@ import (
 	"errors"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
+	"log/slog"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -48,13 +49,24 @@ func (h *AuthServiceHandler) RequestPasswordReset(ctx context.Context, req *pb.R
 	email := normalizeEmail(req.GetEmail())
 	userResp, err := h.Query.GetUserByEmail(ctx, &pb.GetUserByEmailReq{Email: email})
 	// Unknown email (or any lookup miss): no-op success — never reveal
-	// whether the account exists.
+	// whether the account exists. A lookup that FAILED is answered the same,
+	// but the operator hears of it: otherwise a store outage answers every
+	// request with success and nothing reports that no link was sent. The
+	// line carries no address.
+	if notFoundOK(err) != nil {
+		slog.ErrorContext(ctx, "auth: password reset not sent: the account lookup failed", "err", err)
+	}
 	if err != nil || userResp.GetUser() == nil || userResp.GetUser().GetId() == "" {
 		return &pb.RequestPasswordResetResp{}, nil
 	}
 	user := userResp.GetUser()
 	detached := context.WithoutCancel(ctx)
-	runDetached(func() { _ = h.mintResetLink(detached, user) })
+	runDetached(func() {
+		if err := h.mintResetLink(detached, user); err != nil {
+			slog.ErrorContext(detached, "auth: password reset not sent: the link was not minted",
+				"user_id", user.GetId(), "err", err)
+		}
+	})
 	return &pb.RequestPasswordResetResp{}, nil
 }
 
@@ -65,7 +77,8 @@ var runDetached = func(f func()) { go f() }
 // mintResetLink stores a fresh reset link for user and emits
 // PasswordResetRequested through CreatePasswordResetToken. Its error has no
 // caller to reach (see RequestPasswordReset): a link that failed to mint is
-// the same to the person as a mail that did not arrive — they ask again.
+// the same to the person as a mail that did not arrive — they ask again. It
+// is logged, so the operator learns that no link went out.
 func (h *AuthServiceHandler) mintResetLink(ctx context.Context, user *pb.User) error {
 	token, err := randomURLToken()
 	if err != nil {
