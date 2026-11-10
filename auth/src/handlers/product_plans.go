@@ -219,7 +219,8 @@ func (h *AuthServiceHandler) DisallowOrgProducts(ctx context.Context, req *pb.Di
 }
 
 // ListOrgProductPlan is the backoffice's view of one organization's plan.
-func (h *AuthServiceHandler) ListOrgProductPlan(ctx context.Context, req *pb.ListOrgProductPlanReq) (*pb.OrgProductPlanResp, error) {
+func (h *AuthServiceHandler) ListOrgProductPlan(ctx context.Context, req *pb.ListOrgProductPlanReq) (_ *pb.OrgProductPlanResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -230,7 +231,8 @@ func (h *AuthServiceHandler) ListOrgProductPlan(ctx context.Context, req *pb.Lis
 }
 
 // ListMyOrgProductPlan is the active organization's own plan.
-func (h *AuthServiceHandler) ListMyOrgProductPlan(ctx context.Context, req *pb.ListMyOrgProductPlanReq) (*pb.OrgProductPlanResp, error) {
+func (h *AuthServiceHandler) ListMyOrgProductPlan(ctx context.Context, req *pb.ListMyOrgProductPlanReq) (_ *pb.OrgProductPlanResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

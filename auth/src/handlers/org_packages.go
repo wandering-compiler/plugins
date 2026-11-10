@@ -319,7 +319,8 @@ func (h *AuthServiceHandler) RemoveOrgPackage(ctx context.Context, req *pb.Remov
 }
 
 // ListPackagesOfOrg is the backoffice's view of one organization.
-func (h *AuthServiceHandler) ListPackagesOfOrg(ctx context.Context, req *pb.ListPackagesOfOrgReq) (*pb.OrgPackagesResp, error) {
+func (h *AuthServiceHandler) ListPackagesOfOrg(ctx context.Context, req *pb.ListPackagesOfOrgReq) (_ *pb.OrgPackagesResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -330,7 +331,8 @@ func (h *AuthServiceHandler) ListPackagesOfOrg(ctx context.Context, req *pb.List
 }
 
 // ListMyOrgPackages is the active organization's own packages.
-func (h *AuthServiceHandler) ListMyOrgPackages(ctx context.Context, req *pb.ListMyOrgPackagesReq) (*pb.OrgPackagesResp, error) {
+func (h *AuthServiceHandler) ListMyOrgPackages(ctx context.Context, req *pb.ListMyOrgPackagesReq) (_ *pb.OrgPackagesResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

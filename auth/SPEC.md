@@ -1725,6 +1725,14 @@ When `DistTx` is nil, as in a hand-built test handler, the calls fall back to se
 | DisableUsers / membership update and removal | one multi-op statement set (`ops`) | none (live only) |
 | EraseUsers (per account) | BeginUserErasure (tokens · devices · device details · disable · password, email proof and device trust) · each staged feature's eraser · SpendPasswordResetTokens · EraseSignInEvents · EraseUser (address and erased_at), in that order | TestEraseUsers_OneTransactionPerAccount (commit per account; a failing eraser rolls back). Without a coordinator: TestEraseUsers_ARetryCompletesAFailedErasureWithoutATransaction |
 
+#### Outages and replay
+
+A w17 server marks an `UNAVAILABLE` its handler returned as answered, so w17 clients do not replay it: a handler may have written before the outage it reports. A method that changes nothing marks its outage replay-safe (`grpcerr.ReplaySafe`) instead, so the client sends it again.
+
+| ID | MUST hold | Proof |
+|---|---|---|
+| `auth/read-only-outage-replay-safe` | Every service method that writes nothing — `Authenticate`, `AuthenticateAdmin` (their only writes, the token's last use and a legacy token's upgrade, come after every error return and return no error), `ResolveUser`, `WhoAmI` and every `Get…`/`List…` method that opens no transaction — MUST answer an `UNAVAILABLE` marked replay-safe, the status itself unchanged. A method that writes anything (SignIn's history row and guess budget included) MUST NOT mark it, and its outage stays answered. | `TestAuthenticate_AnOutageIsReplaySafe`, `TestSignIn_AnOutageIsNotReplaySafe`, `TestMarkReplaySafe`, `TestReplaySafeMethods_DeferTheMarkAndWriteNothing` (every listed method defers `markReplaySafe` first and calls no `Mutation` and no transaction; no other method defers it) |
+
 #### Performance
 
 | ID | MUST hold | Proof |

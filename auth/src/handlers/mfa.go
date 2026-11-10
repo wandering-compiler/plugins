@@ -735,7 +735,8 @@ func (h *AuthServiceHandler) replaceTotpSecret(txCtx context.Context, userID, se
 }
 
 // GetMfaStatus reports whether the caller has a confirmed authenticator.
-func (h *AuthServiceHandler) GetMfaStatus(ctx context.Context, req *pb.GetMfaStatusReq) (*pb.GetMfaStatusResp, error) {
+func (h *AuthServiceHandler) GetMfaStatus(ctx context.Context, req *pb.GetMfaStatusReq) (_ *pb.GetMfaStatusResp, err error) {
+	defer markReplaySafe(&err)
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)

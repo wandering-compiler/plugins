@@ -236,7 +236,8 @@ func (h *AuthServiceHandler) checkProductRolePermissions(ctx context.Context, c 
 }
 
 // ListProductPermissions is every product's permission codes.
-func (h *AuthServiceHandler) ListProductPermissions(ctx context.Context, req *pb.ListProductPermissionsReq) (*pb.ListProductPermissionsResp, error) {
+func (h *AuthServiceHandler) ListProductPermissions(ctx context.Context, req *pb.ListProductPermissionsReq) (_ *pb.ListProductPermissionsResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

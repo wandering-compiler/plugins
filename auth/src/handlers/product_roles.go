@@ -252,7 +252,8 @@ func endProductRolesOfOrg(ctx context.Context, h *AuthServiceHandler, orgID, by 
 }
 
 // ListProductRoles is the catalogue: every product's roles, or one product's.
-func (h *AuthServiceHandler) ListProductRoles(ctx context.Context, req *pb.ListProductRolesReq) (*pb.ListProductRolesResp, error) {
+func (h *AuthServiceHandler) ListProductRoles(ctx context.Context, req *pb.ListProductRolesReq) (_ *pb.ListProductRolesResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -287,7 +288,8 @@ func (h *AuthServiceHandler) ListProductRoles(ctx context.Context, req *pb.ListP
 }
 
 // ListOrgProductRoleGrants is the active organization's grants.
-func (h *AuthServiceHandler) ListOrgProductRoleGrants(ctx context.Context, req *pb.ListOrgProductRoleGrantsReq) (*pb.ProductRoleGrantsResp, error) {
+func (h *AuthServiceHandler) ListOrgProductRoleGrants(ctx context.Context, req *pb.ListOrgProductRoleGrantsReq) (_ *pb.ProductRoleGrantsResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -481,7 +483,8 @@ func decodeProductRoleRefs(s string) []*pb.ProductRoleRef {
 
 // ListProductRoleGrants is the backoffice's view: an organization's grants,
 // a user's everywhere, or (neither) the realm-wide ones.
-func (h *AuthServiceHandler) ListProductRoleGrants(ctx context.Context, req *pb.ListProductRoleGrantsReq) (*pb.ProductRoleGrantsResp, error) {
+func (h *AuthServiceHandler) ListProductRoleGrants(ctx context.Context, req *pb.ListProductRoleGrantsReq) (_ *pb.ProductRoleGrantsResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -489,7 +492,6 @@ func (h *AuthServiceHandler) ListProductRoleGrants(ctx context.Context, req *pb.
 		return nil, err
 	}
 	var rows *pb.ProductRoleGrantRowsResp
-	var err error
 	switch {
 	case req.GetUserId() != "":
 		rows, err = h.Query.ListUserProductRoleGrantRows(ctx, &pb.ListUserProductRoleGrantRowsReq{UserId: req.GetUserId()})
