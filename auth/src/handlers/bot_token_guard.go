@@ -230,7 +230,8 @@ func (h *AuthServiceHandler) SetBotAllowlist(ctx context.Context, req *pb.SetBot
 
 // GetBotGuard answers a machine account's allowlist and its use summary,
 // under the same operator rules.
-func (h *AuthServiceHandler) GetBotGuard(ctx context.Context, req *pb.GetBotGuardReq) (*pb.GetBotGuardResp, error) {
+func (h *AuthServiceHandler) GetBotGuard(ctx context.Context, req *pb.GetBotGuardReq) (_ *pb.GetBotGuardResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

@@ -147,7 +147,8 @@ func planView(ctx context.Context, h *AuthServiceHandler, plan *pb.ProductPlanRo
 
 // ListProductPlans is the backoffice's list of the named plans: each with its
 // lines and the organizations on it.
-func (h *AuthServiceHandler) ListProductPlans(ctx context.Context, _ *pb.ListProductPlansReq) (*pb.ProductPlansResp, error) {
+func (h *AuthServiceHandler) ListProductPlans(ctx context.Context, _ *pb.ListProductPlansReq) (_ *pb.ProductPlansResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

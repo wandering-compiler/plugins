@@ -1215,7 +1215,8 @@ func (h *AuthServiceHandler) Shutdown(ctx context.Context) error {
 //     per handler against this slice.
 //
 // Every failure mode returns the same Unauthenticated status.
-func (h *AuthServiceHandler) Authenticate(ctx context.Context, req *pb.AuthReq) (*pb.AuthResp, error) {
+func (h *AuthServiceHandler) Authenticate(ctx context.Context, req *pb.AuthReq) (_ *pb.AuthResp, err error) {
+	defer markReplaySafe(&err)
 	return h.authenticate(ctx, req)
 }
 
@@ -1242,7 +1243,8 @@ func (h *AuthServiceHandler) Authenticate(ctx context.Context, req *pb.AuthReq) 
 // The mark is a context value of an unexported type, set only here: nothing a
 // caller sends can put a request on the admin plane, and the mark only ever
 // removes an organization, never adds one.
-func (h *AuthServiceHandler) AuthenticateAdmin(ctx context.Context, req *pb.AuthReq) (*pb.AuthResp, error) {
+func (h *AuthServiceHandler) AuthenticateAdmin(ctx context.Context, req *pb.AuthReq) (_ *pb.AuthResp, err error) {
+	defer markReplaySafe(&err)
 	return h.authenticate(context.WithValue(ctx, adminPlaneKey{}, true), req)
 }
 
@@ -1497,6 +1499,14 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (_ *
 		signInDummyVerify(h, req.GetPassword())
 		return nil, UnauthenticatedSignIn(err)
 	}
+	// A stored hash no algorithm can verify — a machine account's "!", an
+	// erased account's placeholder — is refused by Verify at once, without a
+	// derivation. Pay one anyway, so the time of the refusal does not tell
+	// such an account's address apart from an unknown one or a wrong password.
+	if !passwordhash.Verifiable(user.GetPasswordHash()) {
+		signInDummyVerify(h, req.GetPassword())
+		return nil, UnauthenticatedSignIn(errAuthnPasswordMismatch)
+	}
 	ok, _, _ := h.PasswordHash.VerifyAndRotate(user.GetPasswordHash(), req.GetPassword(), h.rehashOnSignIn(ctx, user))
 	if !ok {
 		return nil, UnauthenticatedSignIn(errAuthnPasswordMismatch)
@@ -1693,7 +1703,8 @@ var signInDummyVerify = func(h *AuthServiceHandler, plain string) {
 // The fail-closed guard covers direct gRPC callers that bypass the
 // gateway (no metadata at all) — same opaque Unauthenticated as the
 // rest of the surface.
-func (h *AuthServiceHandler) WhoAmI(ctx context.Context, req *pb.WhoAmIReq) (*pb.WhoAmIResp, error) {
+func (h *AuthServiceHandler) WhoAmI(ctx context.Context, req *pb.WhoAmIReq) (_ *pb.WhoAmIResp, err error) {
+	defer markReplaySafe(&err)
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)

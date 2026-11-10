@@ -137,7 +137,8 @@ func (h *AuthServiceHandler) UnbindOrgHost(ctx context.Context, req *pb.UnbindOr
 }
 
 // ListOrgHosts is every live binding, by host.
-func (h *AuthServiceHandler) ListOrgHosts(ctx context.Context, _ *pb.ListOrgHostsReq) (*pb.ListOrgHostsResp, error) {
+func (h *AuthServiceHandler) ListOrgHosts(ctx context.Context, _ *pb.ListOrgHostsReq) (_ *pb.ListOrgHostsResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -159,7 +160,8 @@ func (h *AuthServiceHandler) ListOrgHosts(ctx context.Context, _ *pb.ListOrgHost
 // on a white-label host renders it before anyone signs in. A host bound to
 // none — or no host at all — is found = false, never an error, so the answer
 // tells a caller nothing it could not see by visiting the host.
-func (h *AuthServiceHandler) GetHostOrg(ctx context.Context, req *pb.GetHostOrgReq) (*pb.HostOrgResp, error) {
+func (h *AuthServiceHandler) GetHostOrg(ctx context.Context, req *pb.GetHostOrgReq) (_ *pb.HostOrgResp, err error) {
+	defer markReplaySafe(&err)
 	host, err := normalHost(ctx, req.GetHost())
 	if err != nil {
 		return &pb.HostOrgResp{}, nil

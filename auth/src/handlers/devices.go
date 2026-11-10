@@ -31,7 +31,8 @@ func callerDeviceThumbprint(ctx context.Context) string {
 // (trusted_at present and later than the account's last trust revocation,
 // the same rule the sign-in applies) and `current` (this is the device the
 // caller's token is bound to). The key thumbprint never leaves the handler.
-func (h *AuthServiceHandler) ListDevices(ctx context.Context, req *pb.ListDevicesReq) (*pb.ListDevicesResp, error) {
+func (h *AuthServiceHandler) ListDevices(ctx context.Context, req *pb.ListDevicesReq) (_ *pb.ListDevicesResp, err error) {
+	defer markReplaySafe(&err)
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)

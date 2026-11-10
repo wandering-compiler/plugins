@@ -164,7 +164,8 @@ func (h *AuthServiceHandler) ClearOrgEmailProof(ctx context.Context, req *pb.Cle
 }
 
 // GetOrgEmailProof — the backoffice's, realm-wide.
-func (h *AuthServiceHandler) GetOrgEmailProof(ctx context.Context, req *pb.GetOrgEmailProofReq) (*pb.GetOrgEmailProofResp, error) {
+func (h *AuthServiceHandler) GetOrgEmailProof(ctx context.Context, req *pb.GetOrgEmailProofReq) (_ *pb.GetOrgEmailProofResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -219,7 +220,8 @@ func (h *AuthServiceHandler) ClearMyOrgEmailProof(ctx context.Context, req *pb.C
 }
 
 // GetMyOrgEmailProof — the organization's own, from inside it.
-func (h *AuthServiceHandler) GetMyOrgEmailProof(ctx context.Context, req *pb.GetMyOrgEmailProofReq) (*pb.GetOrgEmailProofResp, error) {
+func (h *AuthServiceHandler) GetMyOrgEmailProof(ctx context.Context, req *pb.GetMyOrgEmailProofReq) (_ *pb.GetOrgEmailProofResp, err error) {
+	defer markReplaySafe(&err)
 	_, orgID, err := h.myOrgForEmailProof(ctx, req.GetOrg(), "GetMyOrgEmailProof")
 	if err != nil {
 		return nil, err

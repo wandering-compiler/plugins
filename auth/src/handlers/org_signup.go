@@ -339,7 +339,8 @@ func (h *AuthServiceHandler) ClearOrgSignUpPolicy(ctx context.Context, req *pb.C
 }
 
 // ListOrgSignUpPolicies is an organization's live policies, by kind.
-func (h *AuthServiceHandler) ListOrgSignUpPolicies(ctx context.Context, req *pb.ListOrgSignUpPoliciesReq) (*pb.ListOrgSignUpPoliciesResp, error) {
+func (h *AuthServiceHandler) ListOrgSignUpPolicies(ctx context.Context, req *pb.ListOrgSignUpPoliciesReq) (_ *pb.ListOrgSignUpPoliciesResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

@@ -40,11 +40,6 @@ func currentPasswordWrong(ctx context.Context) error {
 		CodePasswordNotConfirmed, "current_password", MsgPasswordNotConfirmed, nil)
 }
 
-// nilUUID names no token: RevokeOtherSessionTokens keeps none when the caller
-// holds no session (an API-token bearer). The column is a uuid, so an empty
-// string would not compare — it would fail to bind.
-const nilUUID = "00000000-0000-0000-0000-000000000000"
-
 // ChangePassword verifies the caller's current password and replaces it,
 // and ends every OTHER session of the account in the same unit of work.
 //
@@ -55,10 +50,21 @@ const nilUUID = "00000000-0000-0000-0000-000000000000"
 // RevokeAllUserTokens (`devices`), which would make this feature depend on
 // one of them. The sessions are revoked (reason PASSWORD_CHANGED, the caller
 // as revoked_by), not deleted. API tokens are kept; see below.
+//
+// Only a person's session may change the password, as only a session may
+// step up (ConfirmPassword) or mint a token: an API token is a credential a
+// program holds, narrowed to what it was minted for, and replacing the
+// password — and with it signing the person out of every session — is a
+// decision about the person's standing, not one of the token's permissions.
+// The refusal comes before anything is read, counted or written
+// (password_change/session-only).
 func (h *AuthServiceHandler) ChangePassword(ctx context.Context, req *pb.ChangePasswordReq) (*pb.ChangePasswordResp, error) {
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
+	}
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
 	}
 
 	// Read the stored hash for the AUTHENTICATED principal, never for an
@@ -121,10 +127,10 @@ func (h *AuthServiceHandler) ChangePassword(ctx context.Context, req *pb.ChangeP
 	// Together they commit or neither does — a failed sign-out keeps the old
 	// password, and the person is told the change failed.
 	//
-	// The caller's own session is kept (they are in the middle of using it);
-	// a caller on an API token has none, and keeps no session. API tokens
-	// stay: they are credentials minted on purpose, for CI, and a password
-	// change is not a decision about them — revoke one with RevokeApiToken.
+	// The caller's own session is kept (they are in the middle of using it;
+	// requireSessionCaller above made sure there is one). API tokens stay:
+	// they are credentials minted on purpose, for CI, and a password change
+	// is not a decision about them — revoke one with RevokeApiToken.
 	var tx *distx.TxHandle
 	txCtx := ctx
 	if h.DistTx != nil {
@@ -148,13 +154,9 @@ func (h *AuthServiceHandler) ChangePassword(ctx context.Context, req *pb.ChangeP
 		}
 		return fail(err)
 	}
-	keep := callerSessionTokenID(ctx)
-	if keep == "" {
-		keep = nilUUID
-	}
 	if _, err := h.Mutation.RevokeOtherSessionTokens(txCtx, &pb.RevokeOtherSessionTokensReq{
 		UserId:      userID,
-		KeepTokenId: keep,
+		KeepTokenId: callerSessionTokenID(ctx),
 	}); err != nil {
 		return fail(err)
 	}

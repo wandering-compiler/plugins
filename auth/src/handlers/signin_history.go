@@ -337,7 +337,8 @@ func outageCode(c codes.Code) bool {
 // the envelope's, never a request field, so nobody reads another's history
 // here; an attempt that reached no account (user_id NULL) is nobody's to
 // read but the operator's (the admin Sign-ins page).
-func (h *AuthServiceHandler) ListMySignInEvents(ctx context.Context, _ *pb.ListMySignInEventsReq) (*pb.ListMySignInEventsResp, error) {
+func (h *AuthServiceHandler) ListMySignInEvents(ctx context.Context, _ *pb.ListMySignInEventsReq) (_ *pb.ListMySignInEventsResp, err error) {
+	defer markReplaySafe(&err)
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)

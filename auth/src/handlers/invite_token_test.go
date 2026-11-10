@@ -619,3 +619,25 @@ func (m *mintMock) ListOrgRoleRows(ctx context.Context, _ *pb.ListOrgRoleRowsReq
 func (m *mintMock) GetUserByEmail(_ context.Context, _ *pb.GetUserByEmailReq, _ ...grpc.CallOption) (*pb.GetUserByEmailResp, error) {
 	return nil, status.Error(codes.NotFound, "no rows")
 }
+
+// refuseAnyStoreCall fails the test if the handler reaches the store at all.
+func refuseAnyStoreCall(t *testing.T, what string) {
+	t.Helper()
+	if r := recover(); r != nil {
+		t.Fatalf("%s reached the store before refusing the API-token caller: %v", what, r)
+	}
+}
+
+// org_invite/session-only: accepting an invitation changes what the PERSON
+// holds (a membership and a session-realm role), so only the person's session
+// may do it — as only a session may mint a token or change the password. An
+// API token, narrowed to what it was minted for, is refused before anything
+// is read or written.
+func TestAcceptOrgInvite_AnAPITokenCallerIsRefused(t *testing.T) {
+	defer refuseAnyStoreCall(t, "AcceptOrgInvite")
+	h := &AuthServiceHandler{} // no store: any read or write panics
+	_, err := h.AcceptOrgInvite(sessionCallerCtx("u1", ""), &pb.AcceptOrgInviteReq{Token: "tok"})
+	if status.Code(err) != codes.PermissionDenied || refusalCodeOf(err) != CodeSessionRequired {
+		t.Fatalf("an API-token caller: %v, want PermissionDenied / %s", err, CodeSessionRequired)
+	}
+}

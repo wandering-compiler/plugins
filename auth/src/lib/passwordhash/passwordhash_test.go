@@ -220,3 +220,43 @@ func TestDefaultParams(t *testing.T) {
 		t.Errorf("pbkdf2 iters %d below OWASP 2024 baseline 600k", p.PBKDF2Iters)
 	}
 }
+
+// Verifiable is true exactly for a hash Verify derives against: every
+// supported algorithm's PHC string, never a sentinel, an empty value or an
+// unknown prefix (which Verify refuses without deriving anything).
+func TestVerifiable(t *testing.T) {
+	p := DefaultParams()
+	for _, a := range []Algo{Argon2id, Bcrypt, Scrypt, PBKDF2_SHA256} {
+		h, err := Hash("pw-long-enough", a, p)
+		if err != nil {
+			t.Fatalf("hash %v: %v", a, err)
+		}
+		if !Verifiable(h) {
+			t.Errorf("a %v hash is not verifiable: %q", a, h)
+		}
+	}
+	for _, s := range []string{"!", "", "plain", "$argon2i$v=19$m=1,t=1,p=1$x$y"} {
+		if Verifiable(s) {
+			t.Errorf("Verifiable(%q) = true", s)
+		}
+	}
+}
+
+// FixedArgon2idHex is deterministic, salted and 64 hex characters, and its
+// parameters do not move: a pinned vector, so a change to them (which orphans
+// every stored value) fails here first.
+func TestFixedArgon2idHex(t *testing.T) {
+	a := FixedArgon2idHex("abcdefghjk", []byte("0123456789abcdef"))
+	if a != FixedArgon2idHex("abcdefghjk", []byte("0123456789abcdef")) {
+		t.Fatal("not deterministic")
+	}
+	if a == FixedArgon2idHex("abcdefghjk", []byte("fedcba9876543210")) {
+		t.Error("the salt changes nothing")
+	}
+	if len(a) != 64 {
+		t.Errorf("length %d, want 64", len(a))
+	}
+	if want := "300a968805c946e4a7ddc430438ffb7167682d1a2d768dc782d07207dd687860"; a != want {
+		t.Errorf("FixedArgon2idHex moved: %s, pinned %s — every stored value would stop matching", a, want)
+	}
+}
