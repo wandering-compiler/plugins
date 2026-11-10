@@ -813,12 +813,14 @@ func TestFlow_Refunds(t *testing.T) {
 	// Over-refund: the provider refuses; it is the caller's error.
 	_, err = refund(150000, "r-3")
 	wantCode(t, err, codes.InvalidArgument, "refund above the unrefunded amount")
-	// "Full" after partials asks for the whole original amount — refused
-	// the same way, never recorded.
-	_, err = refund(0, "r-4")
-	wantCode(t, err, codes.InvalidArgument, "full refund after partials")
-	if n := r.store.count("refunds"); n != 2 {
-		t.Errorf("refund rows = %d, want 2", n)
+	// No amount after partials is what remains, as the provider's own
+	// refund without an amount: the other 10.
+	rest, err := refund(0, "r-4")
+	if err != nil || rest.GetRefund().GetAmount() != 100000 {
+		t.Fatalf("refund of the rest after partials = %v, %v; want 10.0000", rest, err)
+	}
+	if n := r.store.count("refunds"); n != 3 {
+		t.Errorf("refund rows = %d, want 3", n)
 	}
 	if rf := a.GetRefund(); rf.GetCurrency() != "usd" || rf.GetAmount() != 50000 || rf.GetPaymentId() != p.GetId() {
 		t.Errorf("refund row = %+v", rf)

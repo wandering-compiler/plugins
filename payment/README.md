@@ -198,7 +198,7 @@ so every currency is held exactly; there is no float anywhere, and sums and
 differences are integer arithmetic that refuses to overflow.
 
 Amounts cross the API as int64 values (on the JSON wire, a string of the
-integer: `"199900"`). `RefundPaymentReq.amount` 0 is a full refund.
+integer: `"199900"`). `RefundPaymentReq.amount` 0 refunds what remains of the payment: all of it, or the rest after partial refunds.
 
 The driver converts to the currency's own minor units at the provider
 boundary — ÷100 for a two-decimal currency, ÷10000 for a zero-decimal one

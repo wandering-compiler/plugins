@@ -16,7 +16,7 @@ import (
 func TestRefundAllowed_MismatchWithoutReceivedAmountIsRefused(t *testing.T) {
 	h := &PaymentServiceHandler{}
 	ctx := context.Background()
-	err := h.refundAllowed(ctx, ctx, &pb.Payment{Id: "p1", Currency: "EUR"},
+	_, err := h.refundAllowed(ctx, ctx, &pb.Payment{Id: "p1", Currency: "EUR"},
 		&pb.LockPaymentForRefundResp{Id: "p1", Amount: 100000, Status: int32(pb.Payment_AMOUNT_MISMATCH)}, 10000)
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("want FailedPrecondition for a mismatch with no received amount, got %v", err)

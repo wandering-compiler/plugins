@@ -71,9 +71,6 @@ func TestFlow_RefundPastWhatRemains_IsRefusedBeforeTheProvider(t *testing.T) {
 	if !strings.Contains(err.Error(), "4.0000 of 10.0000 usd") {
 		t.Errorf("the refusal does not say what remains: %v", err)
 	}
-	// A full refund (no amount) is the whole payment, and only 4 remain.
-	_, err = refund(r, p.GetId(), 0, "r3")
-	wantCode(t, err, codes.InvalidArgument, "a full refund after a partial one")
 	if n := r.stripe.count("/v1/refunds"); n != before {
 		t.Errorf("a refused refund reached the provider (%d → %d)", before, n)
 	}
@@ -391,4 +388,54 @@ func TestInLockedTx_AsksForReadCommitted(t *testing.T) {
 			t.Errorf("transaction %d asked for %v, want READ_COMMITTED", i, iso)
 		}
 	}
+}
+
+// amount = 0 refunds what remains, as the provider's own refund without an
+// amount does: after a partial refund it is the rest, not the whole payment
+// (which used to be refused as exceeding what remains). Resolved under the
+// payment's lock; a retry under its key is answered with that refund; once
+// nothing remains it is refused before the provider.
+func TestFlow_AFullRefundAfterAPartialOneRefundsTheRest(t *testing.T) {
+	r := erringRig(t)
+	p := r.paid("user-a", 100000, "k")
+	if _, err := refund(r, p.GetId(), 30000, "r1"); err != nil {
+		t.Fatal(err)
+	}
+	rest, err := refund(r, p.GetId(), 0, "r2")
+	if err != nil {
+		t.Fatalf("refund of the rest after a partial one: %v", err)
+	}
+	if got := rest.GetRefund().GetAmount(); got != 70000 {
+		t.Errorf("the rest refunded %d, want 70000", got)
+	}
+	if got := r.stripe.intent(p.GetProviderPaymentId()).refunded; got != 1000 {
+		t.Errorf("provider refunded %d minor units, want 1000", got)
+	}
+	again, err := refund(r, p.GetId(), 0, "r2")
+	if err != nil || again.GetRefund().GetId() != rest.GetRefund().GetId() {
+		t.Errorf("a retry of the rest under its key = %v, %v; want the same refund", again, err)
+	}
+	// Under a key that names a partial refund, "what remains" is that refund
+	// only once, with it, nothing remains (the request's goal holds); while
+	// something remains it names another refund.
+	q := r.paid("user-b", 100000, "k2")
+	if _, err := refund(r, q.GetId(), 30000, "q1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := refund(r, q.GetId(), 0, "q1"); status.Code(err) != codes.AlreadyExists {
+		t.Errorf("\"the rest\" under the key of a partial refund, 70 remaining: err = %v, want AlreadyExists", err)
+	}
+	if got, err := refund(r, p.GetId(), 0, "r1"); err != nil || got.GetRefund().GetAmount() != 30000 {
+		t.Errorf("\"the rest\" under the key of a partial refund, nothing remaining = %v, %v; want that refund", got, err)
+	}
+	before := r.stripe.count("/v1/refunds")
+	_, err = refund(r, p.GetId(), 0, "r3")
+	wantCode(t, err, codes.InvalidArgument, "a refund of the rest when nothing remains")
+	if n := r.stripe.count("/v1/refunds"); n != before {
+		t.Errorf("a refund of nothing reached the provider (%d → %d)", before, n)
+	}
+	if n := r.store.count("refunds"); n != 3 {
+		t.Errorf("refund rows = %d, want 3", n)
+	}
+	wantNoLocksLeft(t, r)
 }

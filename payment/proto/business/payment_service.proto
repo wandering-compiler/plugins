@@ -73,8 +73,8 @@ message ChargeResp {
 }
 
 // RefundPaymentReq reverses a Payment. amount is MONEY at scale 4; 0
-// = full refund (the payment's amount). currency defaults to the
-// payment's currency.
+// = what remains of the payment (all of it, or the rest after partial
+// refunds). currency defaults to the payment's currency.
 message RefundPaymentReq {
   string payment_id = 1;
   int64 amount     = 2 [(w17.field) = { type: MONEY, scale: 4 }];
