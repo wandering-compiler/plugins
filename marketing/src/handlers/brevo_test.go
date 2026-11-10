@@ -34,8 +34,11 @@ type fakeBrevo struct {
 	ensured []string
 	// ensureFails: how many more times each attribute's creation fails.
 	ensureFails map[string]int
-	deletes     []string
-	callErr     error
+	// ensureBlocks: each attribute's creation waits for its context to end
+	// (a Brevo that does not answer).
+	ensureBlocks bool
+	deletes      []string
+	callErr      error
 	// contacts is the account's listing (ListContacts), oldest first.
 	contacts []brevo.Contact
 	listErr  error
@@ -161,7 +164,14 @@ func (f *fakeBrevo) UpdateContact(_ context.Context, ext string, attrs map[strin
 	return nil
 }
 
-func (f *fakeBrevo) EnsureAttribute(_ context.Context, name, typ string) error {
+func (f *fakeBrevo) EnsureAttribute(ctx context.Context, name, typ string) error {
+	f.mu.Lock()
+	block := f.ensureBlocks
+	f.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ensured = append(f.ensured, name+":"+typ)
@@ -810,4 +820,55 @@ func TestEventFor_WritesNothingToTheContact(t *testing.T) {
 	if cp := f.batches[0][0].ContactProperties; len(cp) != 0 {
 		t.Errorf("the event writes to the contact: %v (the kept decision is a no: %+v)", cp, l.contacts["u1"])
 	}
+}
+
+// The attributes the auth events write exist before the plugin subscribes to
+// them: prepareAttributes creates them before it returns (setupBrevo calls it
+// before any registration), so a sign-up handled in the first moments of a
+// fresh account does not write W17_SIGNED_UP_AT into the void, which Brevo
+// drops silently and nothing writes again. The activity attributes, and a
+// fixed one Brevo did not create, follow in the background.
+func TestPrepareAttributes_TheFixedOnesBeforeItReturns(t *testing.T) {
+	f := &fakeBrevo{ensureFails: map[string]int{"W17_MARKETING_CONSENT_AT": 1}}
+	tl := tool(t, f, &ledger{}, "all", "", "")
+	tl.attributes = true
+	stop := tl.prepareAttributes(time.Second, time.Millisecond)
+	defer stop()
+	got := f.ensuredSoFar()
+	want := []string{"W17_MARKETING_CONSENT:boolean", "W17_MARKETING_CONSENT_AT:date", "W17_SIGNED_UP_AT:date"}
+	if len(got) < len(want) || strings.Join(got[:3], ",") != strings.Join(want, ",") {
+		t.Fatalf("ensured when prepareAttributes returned = %v, want %v first", got, want)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !contains(f.ensuredSoFar(), "W17_TASKSBUSINESS_CREATETASK:date") || count(f.ensuredSoFar(), "W17_MARKETING_CONSENT_AT:date") < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the background did not create the rest: %v", f.ensuredSoFar())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A Brevo that does not answer holds the boot up for the bound at most; the
+// attributes are then created in the background.
+func TestPrepareAttributes_AnUnansweringBrevoHoldsTheBootForTheBoundOnly(t *testing.T) {
+	f := &fakeBrevo{ensureBlocks: true}
+	tl := tool(t, f, &ledger{}, "all", "", "")
+	start := time.Now()
+	stop := tl.prepareAttributes(50*time.Millisecond, time.Hour)
+	stop()
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("prepareAttributes took %v with a bound of 50ms", d)
+	}
+}
+
+func contains(xs []string, x string) bool { return count(xs, x) > 0 }
+
+func count(xs []string, x string) int {
+	n := 0
+	for _, v := range xs {
+		if v == x {
+			n++
+		}
+	}
+	return n
 }
