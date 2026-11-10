@@ -1,5 +1,27 @@
 # grant — changelog
 
+## 0.1.0-rc.5
+
+### Approving or rejecting answers the whole version
+
+`ApproveEnvelope` and `RejectEnvelope` answer the version they decided with its organization, fields, `proposed_at`, `decided_at` and decision note. The approve answer used to carry only id, organization and status, the reject answer had no organization. No request changes.
+
+### A seeded envelope without a name is not served
+
+`GetOrgEnvelope` answers `found = false` for an approved envelope whose `display_name` is blank. A proposal could never be nameless; a row seeded by fixture could, and was served as a co-brand with no name on it.
+
+### An envelope not yet decided says so
+
+`EnvelopeRow.decided_at` is declared `(w17.field).null`: a proposed envelope has no decision, and a generated query that can fill a field with SQL NULL must now say so. No wire or handler change.
+
+### One waiting proposal per organization (read first)
+
+`ProposeEnvelope` now answers `FailedPrecondition` while another proposal of the same organization waits for the backoffice. An organization that wants to change a waiting proposal waits until it is approved or rejected, then proposes again; a client that proposed repeatedly to "update" a proposal must stop doing so. `ListEnvelopeProposals` answers at most the oldest 200 waiting proposals and `GetMyEnvelopes` the newest 100 versions of the organization. The new storage read `GetPendingEnvelope` needs the activation's storage regenerated.
+
+### An UNAVAILABLE answered before anything was done is replayed by w17 clients
+
+The w17 SDK no longer replays a handler's `UNAVAILABLE` unless the handler marks it replay-safe (`grpcerr.ReplaySafe`). The plugin marks the ones it answers before the call changed anything (reads, lookups), so a w17 client still retries those; an `UNAVAILABLE` after a write is returned to the caller. Needs the SDK release that has `grpcerr.ReplaySafe`.
+
 ## 0.1.0-rc.4
 
 ### The organization envelope offered to other domains' services
