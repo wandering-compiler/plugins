@@ -247,7 +247,8 @@ func (h *AuthServiceHandler) ClearOrgTwoFactorPolicy(ctx context.Context, req *p
 }
 
 // ListOrgTwoFactorPolicies — the backoffice's, realm-wide.
-func (h *AuthServiceHandler) ListOrgTwoFactorPolicies(ctx context.Context, req *pb.ListOrgTwoFactorPoliciesReq) (*pb.ListOrgTwoFactorPoliciesResp, error) {
+func (h *AuthServiceHandler) ListOrgTwoFactorPolicies(ctx context.Context, req *pb.ListOrgTwoFactorPoliciesReq) (_ *pb.ListOrgTwoFactorPoliciesResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -305,7 +306,8 @@ func (h *AuthServiceHandler) ClearMyOrgTwoFactorPolicy(ctx context.Context, req 
 }
 
 // ListMyOrgTwoFactorPolicies — the organization's own, from inside it.
-func (h *AuthServiceHandler) ListMyOrgTwoFactorPolicies(ctx context.Context, req *pb.ListMyOrgTwoFactorPoliciesReq) (*pb.ListOrgTwoFactorPoliciesResp, error) {
+func (h *AuthServiceHandler) ListMyOrgTwoFactorPolicies(ctx context.Context, req *pb.ListMyOrgTwoFactorPoliciesReq) (_ *pb.ListOrgTwoFactorPoliciesResp, err error) {
+	defer markReplaySafe(&err)
 	_, orgID, err := h.myOrgForTwoFactorPolicy(ctx, req.GetOrg(), "ListMyOrgTwoFactorPolicies")
 	if err != nil {
 		return nil, err

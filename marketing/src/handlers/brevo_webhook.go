@@ -15,6 +15,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
+
 	"github.com/wandering-compiler/plugins/marketing/gen"
 	pb "github.com/wandering-compiler/plugins/marketing/gen/pb"
 )
@@ -69,15 +71,23 @@ type brevoWebhookEvent struct {
 	DateEvent string      `json:"date_event"`
 }
 
-// at is when it happened: ts_event (unix seconds), else date_event, else now.
+// at is when it happened: ts_event (unix seconds), else date_event, else
+// now — and never later than now. An unsubscribe dated in the future (a clock
+// fault, a forged body sent with the token) would outrank every consent
+// decided before that date (blacklisted compares the two) and reach auth as a
+// withdrawal from the future.
 func (e brevoWebhookEvent) at() time.Time {
+	now := time.Now().UTC()
+	at := now
 	if s, err := e.TsEvent.Int64(); err == nil && s > 0 {
-		return time.Unix(s, 0).UTC()
+		at = time.Unix(s, 0).UTC()
+	} else if t, err := time.Parse("2006-01-02 15:04:05", e.DateEvent); err == nil {
+		at = t.UTC()
 	}
-	if t, err := time.Parse("2006-01-02 15:04:05", e.DateEvent); err == nil {
-		return t.UTC()
+	if at.After(now) {
+		return now
 	}
-	return time.Now().UTC()
+	return at
 }
 
 // parseBrevoWebhook reads one event, or the array a batched webhook sends.
@@ -107,7 +117,9 @@ func (w *brevoWebhook) IngestBrevo(ctx context.Context, req *pb.IngestBrevoReq) 
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "marketing plugin: a Brevo webhook body that does not parse: %v", err)
 	}
-	n := 0
+	// wrote: an unsubscribe of this delivery was handled (recorded, maybe
+	// handed to the hook). Until then an UNAVAILABLE is replay-safe.
+	n, wrote := 0, false
 	for _, ev := range events {
 		if ev.Event != "unsubscribe" && ev.Event != "unsubscribed" {
 			continue
@@ -123,13 +135,20 @@ func (w *brevoWebhook) IngestBrevo(ctx context.Context, req *pb.IngestBrevoReq) 
 			continue
 		}
 		if err != nil {
-			return nil, status.Errorf(codes.Unavailable, "marketing plugin: finding the user of an unsubscribed address: %v", err)
+			err = status.Errorf(codes.Unavailable, "marketing plugin: finding the user of an unsubscribed address: %v", err)
+			if !wrote {
+				// Nothing of this delivery was written: a w17 client may send
+				// it again (grpcerr.ReplaySafe).
+				err = grpcerr.ReplaySafe(err)
+			}
+			return nil, err
 		}
 		if len(got.GetContacts()) == 0 {
 			log.Printf("marketing plugin: Brevo unsubscribed an address no user of the plugin has; nothing to write back")
 			continue
 		}
 		for _, r := range got.GetContacts() {
+			wrote = true
 			done, err := w.withdraw(ctx, r, ev.at())
 			if err != nil {
 				return nil, status.Error(codes.Unavailable, err.Error())

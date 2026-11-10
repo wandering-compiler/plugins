@@ -984,7 +984,7 @@ message UserRecoveryCode {
 
   string id        = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string user_id   = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { fk: "@module.User", deletion_rule: BLOCK, index: true }];
-  string code_hash = 3 [(w17.field) = { type: CHAR, max_len: 64 }]; // hex sha256 of the normalised code
+  string code_hash = 3 [(w17.field) = { type: CHAR, max_len: 64 }]; // hex argon2id of the normalised code, salted by the account (a set made before: hex sha256)
   google.protobuf.Timestamp used_at    = 4 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp created_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
   // revoked_at — the set this code belongs to was replaced, or the
@@ -2279,6 +2279,22 @@ message OrgSignUpPolicy {
     (w17.field) = { type: TEXT, blank: true, default_string: "" },
     (w17.contrib.plugin_feature_field) = "product_roles"
   ];
+
+  // role_snapshot — the role as the operator setting an open policy was
+  // allowed to hand it out, in OrgInvite.role_snapshot's form
+  // (`<role id>:<permission ids, sorted, comma-separated>`, or `<role id>:*`
+  // for a wildcard). Written by SetOrgSignUpPolicy from the role ceiling
+  // (handlers/role_ceiling.go) and checked at every registration the policy
+  // admits, because the grant is written THEN, against a catalogue that may
+  // have moved in between: a role widened since the policy was set, or a
+  // different role now answering to the name, would otherwise hand out
+  // permissions the operator never held.
+  //
+  // Empty on a closed policy, and on an open one seeded by fixtures or set
+  // before the column existed. Such an open policy is pinned by its first
+  // registration (PinOrgSignUpPolicySnapshotRow) to the role as it reads then,
+  // and held to that from the next registration on.
+  string role_snapshot = 12 [(w17.field) = { type: TEXT, blank: true, default_string: "" }];
 }
 
 // OrgTwoFactorPolicy — whether an organization's people sign in with a second

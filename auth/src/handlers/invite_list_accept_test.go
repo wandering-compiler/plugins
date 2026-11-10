@@ -210,3 +210,14 @@ func TestOrgInvites_ListedAndWithdrawnWithinTheCeiling(t *testing.T) {
 		t.Errorf("an admin was shown %v, want both", list.GetInvites())
 	}
 }
+
+// invite_accept_from_list/session-only: as AcceptOrgInvite, an API-token
+// caller is refused before the invitation is read.
+func TestAcceptMyOrgInvite_AnAPITokenCallerIsRefused(t *testing.T) {
+	defer refuseAnyStoreCall(t, "AcceptMyOrgInvite")
+	h := &AuthServiceHandler{}
+	_, err := h.AcceptMyOrgInvite(sessionCallerCtx("u1", ""), &pb.AcceptMyOrgInviteReq{InviteId: "inv-1"})
+	if status.Code(err) != codes.PermissionDenied || refusalCodeOf(err) != CodeSessionRequired {
+		t.Fatalf("an API-token caller: %v, want PermissionDenied / %s", err, CodeSessionRequired)
+	}
+}

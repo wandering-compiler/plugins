@@ -523,7 +523,8 @@ func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, a *signInAtt
 // A session only, as CreateApiToken: an API token is a credential for
 // automation, and one that leaked must not be able to read the holder's
 // other credentials, or revoke them (below).
-func (h *AuthServiceHandler) ListApiTokens(ctx context.Context, req *pb.ListApiTokensReq) (*pb.ListApiTokensResp, error) {
+func (h *AuthServiceHandler) ListApiTokens(ctx context.Context, req *pb.ListApiTokensReq) (_ *pb.ListApiTokensResp, err error) {
+	defer markReplaySafe(&err)
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)

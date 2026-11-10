@@ -735,7 +735,8 @@ func orgSlugFromContext(ctx context.Context) string {
 // member of — for the CLI's `org list`, the login-time membership cache,
 // and the init org picker. The caller is the gateway-resolved principal
 // (callerUserID — same source as WhoAmI), never a client-sent user_id.
-func (h *AuthServiceHandler) ListMyOrgs(ctx context.Context, _ *pb.ListMyOrgsReq) (*pb.ListMyOrgsResp, error) {
+func (h *AuthServiceHandler) ListMyOrgs(ctx context.Context, _ *pb.ListMyOrgsReq) (_ *pb.ListMyOrgsResp, err error) {
+	defer markReplaySafe(&err)
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -780,7 +781,8 @@ func activeOrgID(ctx context.Context) (string, error) {
 // enables membership WITHOUT invites holding an interface method nothing
 // implements. That is not hypothetical — e2e-project's admin_auth
 // activation is exactly that combination, and it is what caught this.
-func (h *AuthServiceHandler) ListOrgMembers(ctx context.Context, req *pb.ListOrgMembersReq) (*pb.ListOrgMembersResp, error) {
+func (h *AuthServiceHandler) ListOrgMembers(ctx context.Context, req *pb.ListOrgMembersReq) (_ *pb.ListOrgMembersResp, err error) {
+	defer markReplaySafe(&err)
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err
 	}

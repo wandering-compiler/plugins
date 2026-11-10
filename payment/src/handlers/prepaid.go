@@ -344,7 +344,7 @@ func (h *PaymentServiceHandler) GetMyCreditBalance(ctx context.Context, _ *pb.Ge
 		// wallet that holds nothing is zero, not missing.
 		return &pb.GetCreditBalanceResp{Balance: &pb.CreditBalance{UserId: caller, Balance: 0}}, nil
 	}
-	return got, err
+	return got, beforeAnyEffect(err)
 }
 
 func init() {

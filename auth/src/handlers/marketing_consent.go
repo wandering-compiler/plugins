@@ -29,7 +29,8 @@ func init() {
 
 // GetMarketingConsent answers the caller's consent and when they decided it;
 // `decided_at` is unset when they were never asked.
-func (h *AuthServiceHandler) GetMarketingConsent(ctx context.Context, _ *pb.GetMarketingConsentReq) (*pb.MarketingConsentResp, error) {
+func (h *AuthServiceHandler) GetMarketingConsent(ctx context.Context, _ *pb.GetMarketingConsentReq) (_ *pb.MarketingConsentResp, err error) {
+	defer markReplaySafe(&err)
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)

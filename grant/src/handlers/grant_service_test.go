@@ -10,8 +10,11 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
+	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
 	pb "github.com/wandering-compiler/plugins/grant/gen/pb"
 )
@@ -25,11 +28,11 @@ type store struct {
 
 func (s *store) InsertEnvelope(_ context.Context, in *pb.InsertEnvelopeReq, _ ...grpc.CallOption) (*pb.InsertEnvelopeResp, error) {
 	id := "env-" + string(rune('a'+len(s.envelopes)))
-	s.envelopes = append(s.envelopes, &pb.EnvelopeRow{Id: id, OrgId: in.GetOrgId(), Status: StatusProposed, DisplayName: in.GetDisplayName()})
+	s.envelopes = append(s.envelopes, &pb.EnvelopeRow{Id: id, OrgId: in.GetOrgId(), Status: StatusProposed, DisplayName: in.GetDisplayName(), WebsiteUrl: in.GetWebsiteUrl(), ProposedAt: timestamppb.Now()})
 	return &pb.InsertEnvelopeResp{Id: id}, nil
 }
 
-func (s *store) ApproveEnvelopeRow(_ context.Context, in *pb.ApproveEnvelopeRowReq, _ ...grpc.CallOption) (*pb.ApproveEnvelopeRowResp, error) {
+func (s *store) ApproveEnvelopeRow(_ context.Context, in *pb.ApproveEnvelopeRowReq, _ ...grpc.CallOption) (*pb.DecidedEnvelope, error) {
 	var target *pb.EnvelopeRow
 	for _, e := range s.envelopes {
 		if e.GetId() == in.GetId() && e.GetStatus() == StatusProposed {
@@ -45,12 +48,40 @@ func (s *store) ApproveEnvelopeRow(_ context.Context, in *pb.ApproveEnvelopeRowR
 		}
 	}
 	target.Status = StatusApproved
-	return &pb.ApproveEnvelopeRowResp{Id: target.GetId(), OrgId: target.GetOrgId()}, nil
+	target.DecidedAt = timestamppb.Now()
+	return decided(target), nil
+}
+
+func (s *store) RejectEnvelopeRow(_ context.Context, in *pb.RejectEnvelopeRowReq, _ ...grpc.CallOption) (*pb.DecidedEnvelope, error) {
+	for _, e := range s.envelopes {
+		if e.GetId() == in.GetId() && e.GetStatus() == StatusProposed {
+			e.Status, e.DecisionNote, e.DecidedAt = StatusRejected, in.GetDecisionNote(), timestamppb.Now()
+			return decided(e), nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "not pending")
+}
+
+// decided is the row as the decision's RETURNING reads it.
+func decided(e *pb.EnvelopeRow) *pb.DecidedEnvelope {
+	return &pb.DecidedEnvelope{
+		Id: e.GetId(), OrgId: e.GetOrgId(), Status: e.GetStatus(), DisplayName: e.GetDisplayName(),
+		WebsiteUrl: e.GetWebsiteUrl(), ProposedAt: e.GetProposedAt(), DecidedAt: e.GetDecidedAt(), DecisionNote: e.GetDecisionNote(),
+	}
 }
 
 func (s *store) GetApprovedEnvelope(_ context.Context, in *pb.GetApprovedEnvelopeReq, _ ...grpc.CallOption) (*pb.EnvelopeRow, error) {
 	for _, e := range s.envelopes {
 		if e.GetOrgId() == in.GetOrgId() && e.GetStatus() == StatusApproved {
+			return e, nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "none")
+}
+
+func (s *store) GetPendingEnvelope(_ context.Context, in *pb.GetPendingEnvelopeReq, _ ...grpc.CallOption) (*pb.EnvelopeRow, error) {
+	for _, e := range s.envelopes {
+		if e.GetOrgId() == in.GetOrgId() && e.GetStatus() == StatusProposed {
 			return e, nil
 		}
 	}
@@ -143,17 +174,44 @@ func TestProposeNeedsAnOrganization(t *testing.T) {
 
 // raceMutation answers ApproveEnvelopeRow as the unique index does when
 // another version of the organization was approved at the same moment.
-type raceMutation struct{ pb.GrantMutationClient }
-
-func (raceMutation) ApproveEnvelopeRow(context.Context, *pb.ApproveEnvelopeRowReq, ...grpc.CallOption) (*pb.ApproveEnvelopeRowResp, error) {
-	return nil, status.Error(codes.AlreadyExists, "unique violation")
+type raceMutation struct {
+	pb.GrantMutationClient
+	err error
 }
 
-// The approval that loses the race is told so, not handed a storage error.
+func (m raceMutation) ApproveEnvelopeRow(context.Context, *pb.ApproveEnvelopeRowReq, ...grpc.CallOption) (*pb.DecidedEnvelope, error) {
+	return nil, m.err
+}
+
+// uniqueViolation is the shape generated storage answers a write the unique
+// (org_id, approved_slot) index refuses: InvalidArgument carrying an
+// ErrorDetail{code: UNIQUE_VIOLATION} (grpcerr.Wrap collapses constraint
+// violations into InvalidArgument; the detail tells them apart).
+func uniqueViolation(t *testing.T) error {
+	t.Helper()
+	st, err := status.New(codes.InvalidArgument, "unique violation").WithDetails(&w17pb.ErrorDetail{Code: "UNIQUE_VIOLATION"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st.Err()
+}
+
+// The approval that loses the race is told so, not handed a storage error —
+// in the shape storage emits (InvalidArgument + UNIQUE_VIOLATION) and in the
+// AlreadyExists one. Any other InvalidArgument stays what it is.
 func TestApproveEnvelopeRace(t *testing.T) {
-	h := &GrantServiceHandler{Mutation: raceMutation{}, Lock: &acllock.Lock{Permissions: map[string]int{"GRANT_GRANT_SERVICE_APPROVE_ENVELOPE": 1}}}
-	if _, err := h.ApproveEnvelope(as("ops", ""), &pb.ApproveEnvelopeReq{Id: "x"}); status.Code(err) != codes.Aborted {
-		t.Errorf("err = %v, want Aborted", err)
+	for name, tc := range map[string]struct {
+		err  error
+		want codes.Code
+	}{
+		"storage shape":  {uniqueViolation(t), codes.Aborted},
+		"already exists": {status.Error(codes.AlreadyExists, "unique violation"), codes.Aborted},
+		"other invalid":  {status.Error(codes.InvalidArgument, "bad id"), codes.InvalidArgument},
+	} {
+		h := &GrantServiceHandler{Mutation: raceMutation{err: tc.err}, Lock: &acllock.Lock{Permissions: map[string]int{"GRANT_GRANT_SERVICE_APPROVE_ENVELOPE": 1}}}
+		if _, err := h.ApproveEnvelope(as("ops", ""), &pb.ApproveEnvelopeReq{Id: "x"}); status.Code(err) != tc.want {
+			t.Errorf("%s: err = %v, want %s", name, err, tc.want)
+		}
 	}
 }
 
@@ -203,5 +261,106 @@ func TestEnvelopeDecisions_TheBackofficeFromInsideAnOrganization(t *testing.T) {
 	}
 	if _, err := h.ApproveEnvelope(backoffice("org-ops"), &pb.ApproveEnvelopeReq{Id: v1.GetId()}); err != nil {
 		t.Errorf("the backoffice approving from inside its own organization: %v", err)
+	}
+}
+
+// A decision is answered with what was decided: the version's organization,
+// its fields and when it was proposed and decided — a backoffice page shows
+// "approved: <name> of <org>" from the answer, without listing again.
+func TestEnvelopeDecisions_AnswerWhatWasDecided(t *testing.T) {
+	s := &store{}
+	h := &GrantServiceHandler{Query: s, Mutation: s, Lock: &acllock.Lock{Permissions: map[string]int{
+		"GRANT_GRANT_SERVICE_APPROVE_ENVELOPE": 1, "GRANT_GRANT_SERVICE_REJECT_ENVELOPE": 2}}}
+	fields := &pb.EnvelopeFields{DisplayName: "Acme", WebsiteUrl: "https://acme.example"}
+	v1, err := h.ProposeEnvelope(as("admin", "org-acme"), &pb.ProposeEnvelopeReq{Fields: fields})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.ApproveEnvelope(as("ops", ""), &pb.ApproveEnvelopeReq{Id: v1.GetId()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetId() != v1.GetId() || got.GetOrgId() != "org-acme" || got.GetStatus() != StatusApproved ||
+		got.GetFields().GetDisplayName() != "Acme" || got.GetFields().GetWebsiteUrl() != "https://acme.example" ||
+		got.GetProposedAt() == nil || got.GetDecidedAt() == nil {
+		t.Errorf("approve answered %+v, want the whole approved version", got)
+	}
+	v2, err := h.ProposeEnvelope(as("admin", "org-acme"), &pb.ProposeEnvelopeReq{Fields: &pb.EnvelopeFields{DisplayName: "Acme 2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = h.RejectEnvelope(as("ops", ""), &pb.RejectEnvelopeReq{Id: v2.GetId(), Note: "logo missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetId() != v2.GetId() || got.GetOrgId() != "org-acme" || got.GetStatus() != StatusRejected ||
+		got.GetFields().GetDisplayName() != "Acme 2" || got.GetDecisionNote() != "logo missing" ||
+		got.GetProposedAt() == nil || got.GetDecidedAt() == nil {
+		t.Errorf("reject answered %+v, want the whole rejected version", got)
+	}
+}
+
+// One proposal per organization waits at a time: a second one while the
+// first waits is refused and writes nothing, so a member proposing in a loop
+// cannot grow the backoffice's list (or the table) without bound. Once the
+// backoffice decided the first, the organization proposes again; another
+// organization's proposal is its own.
+func TestProposeEnvelope_OnePendingPerOrganization(t *testing.T) {
+	s := &store{}
+	h := &GrantServiceHandler{Query: s, Mutation: s, Lock: &acllock.Lock{Permissions: map[string]int{"GRANT_GRANT_SERVICE_REJECT_ENVELOPE": 1}}}
+	propose := func(org, name string) (*pb.EnvelopeVersion, error) {
+		return h.ProposeEnvelope(as("admin", org), &pb.ProposeEnvelopeReq{Fields: &pb.EnvelopeFields{DisplayName: name}})
+	}
+	v1, err := propose("org-acme", "Acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := propose("org-acme", "Acme again"); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("a second proposal while one waits: err = %v, want FailedPrecondition", err)
+	}
+	if len(s.envelopes) != 1 {
+		t.Fatalf("the refused proposal wrote a row: %d rows", len(s.envelopes))
+	}
+	if _, err := propose("org-other", "Other"); err != nil {
+		t.Fatalf("another organization's proposal: %v", err)
+	}
+	if _, err := h.RejectEnvelope(as("ops", ""), &pb.RejectEnvelopeReq{Id: v1.GetId(), Note: "no"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := propose("org-acme", "Acme, fixed"); err != nil {
+		t.Fatalf("a proposal after the first was decided: %v", err)
+	}
+}
+
+// downQuery / downMutation answer every call as a storage that cannot be
+// reached.
+type downQuery struct{ pb.GrantQueryClient }
+
+func (downQuery) GetApprovedEnvelope(context.Context, *pb.GetApprovedEnvelopeReq, ...grpc.CallOption) (*pb.EnvelopeRow, error) {
+	return nil, status.Error(codes.Unavailable, "database unavailable")
+}
+func (downQuery) GetPendingEnvelope(context.Context, *pb.GetPendingEnvelopeReq, ...grpc.CallOption) (*pb.EnvelopeRow, error) {
+	return nil, status.Error(codes.NotFound, "none")
+}
+
+type downMutation struct{ pb.GrantMutationClient }
+
+func (downMutation) InsertEnvelope(context.Context, *pb.InsertEnvelopeReq, ...grpc.CallOption) (*pb.InsertEnvelopeResp, error) {
+	return nil, status.Error(codes.Unavailable, "database unavailable")
+}
+
+// An UNAVAILABLE answered before the call wrote anything — every read — is
+// marked replay-safe, so a w17 client sends it again (the SDK replays a
+// handler's UNAVAILABLE only when so marked). One a write answered is not:
+// the write may have landed.
+func TestUnavailable_ReplaySafeOnlyBeforeAWrite(t *testing.T) {
+	h := &GrantServiceHandler{Query: downQuery{}, Mutation: downMutation{}}
+	_, err := h.GetOrgEnvelope(context.Background(), &pb.GetOrgEnvelopeReq{OrgId: "org-acme"})
+	if status.Code(err) != codes.Unavailable || !grpcerr.IsReplaySafe(err) {
+		t.Errorf("a read: %v (replay-safe %v), want a replay-safe Unavailable", err, grpcerr.IsReplaySafe(err))
+	}
+	_, err = h.ProposeEnvelope(as("admin", "org-acme"), &pb.ProposeEnvelopeReq{Fields: &pb.EnvelopeFields{DisplayName: "Acme"}})
+	if status.Code(err) != codes.Unavailable || grpcerr.IsReplaySafe(err) {
+		t.Errorf("a write: %v (replay-safe %v), want an Unavailable NOT marked replay-safe", err, grpcerr.IsReplaySafe(err))
 	}
 }

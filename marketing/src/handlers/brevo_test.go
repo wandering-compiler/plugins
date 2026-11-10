@@ -34,8 +34,11 @@ type fakeBrevo struct {
 	ensured []string
 	// ensureFails: how many more times each attribute's creation fails.
 	ensureFails map[string]int
-	deletes     []string
-	callErr     error
+	// ensureBlocks: each attribute's creation waits for its context to end
+	// (a Brevo that does not answer).
+	ensureBlocks bool
+	deletes      []string
+	callErr      error
 	// contacts is the account's listing (ListContacts), oldest first.
 	contacts []brevo.Contact
 	listErr  error
@@ -161,7 +164,14 @@ func (f *fakeBrevo) UpdateContact(_ context.Context, ext string, attrs map[strin
 	return nil
 }
 
-func (f *fakeBrevo) EnsureAttribute(_ context.Context, name, typ string) error {
+func (f *fakeBrevo) EnsureAttribute(ctx context.Context, name, typ string) error {
+	f.mu.Lock()
+	block := f.ensureBlocks
+	f.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ensured = append(f.ensured, name+":"+typ)
@@ -229,6 +239,10 @@ type ledger struct {
 	// beforeConsentWrite runs once, inside the next SetContactConsent, before
 	// it writes: another delivery landing in between.
 	beforeConsentWrite func()
+	// recordFails: how many more times recording each sent id fails.
+	recordFails map[string]int
+	// byEmailErr: what ListContactsByEmail answers for an address.
+	byEmailErr map[string]error
 }
 
 func (l *ledger) RecordActivity(_ context.Context, in *pb.ActivityReq, _ ...grpc.CallOption) (*pb.ActivityWriteResp, error) {
@@ -299,6 +313,10 @@ func (l *ledger) ListSentEvents(_ context.Context, in *pb.ListSentEventsReq, _ .
 }
 
 func (l *ledger) RecordSentEvent(_ context.Context, in *pb.RecordSentEventReq, _ ...grpc.CallOption) (*pb.RecordSentEventResp, error) {
+	if l.recordFails[in.GetId()] > 0 {
+		l.recordFails[in.GetId()]--
+		return nil, status.Error(codes.Unavailable, "table hiccup")
+	}
 	if l.sent[in.GetId()] {
 		st, _ := status.New(codes.InvalidArgument, "duplicate").WithDetails(&w17pb.ErrorDetail{Code: "UNIQUE_VIOLATION"})
 		return nil, st.Err()
@@ -332,6 +350,9 @@ func (l *ledger) ListContacts(_ context.Context, in *pb.ListContactsReq, _ ...gr
 func (l *ledger) ListContactsByEmail(_ context.Context, in *pb.ListContactsByEmailReq, _ ...grpc.CallOption) (*pb.ListContactsResp, error) {
 	if in.GetEmail() == l.badEmail {
 		return nil, status.Error(codes.InvalidArgument, "email: not an address")
+	}
+	if err := l.byEmailErr[in.GetEmail()]; err != nil {
+		return nil, err
 	}
 	out := &pb.ListContactsResp{}
 	for _, c := range l.contacts {
@@ -681,7 +702,7 @@ func TestContacts_FollowTheAccounts(t *testing.T) {
 	ctx := context.Background()
 	_ = tl.onUserCreated(ctx, &pb.AuthUserCreated{UserId: "u1", Email: "a@x.example"})
 	_ = tl.onUserUpdated(ctx, &pb.AuthUserUpdated{UserId: "u1", Email: "b@x.example"})
-	_ = tl.onConsentChanged(ctx, &pb.AuthMarketingConsentChanged{UserId: "u1", Consent: false})
+	_ = tl.onConsentChanged(ctx, &pb.AuthMarketingConsentChanged{UserId: "u1", Consent: false, DecidedAt: timestamppb.Now()})
 	_ = tl.onUserDeleted(ctx, &pb.AuthUserDeleted{UserId: "u1"})
 	// Unknown at sign-up: created. Known: updated by its id, the address as
 	// EMAIL — an upsert by POST cannot change an address (Brevo refuses the
@@ -689,7 +710,7 @@ func TestContacts_FollowTheAccounts(t *testing.T) {
 	if strings.Join(f.upserts, ";") != "u1|a@x.example|map[]|bl=true" {
 		t.Errorf("upserts = %v", f.upserts)
 	}
-	// A decision without decided_at is dated by its handling.
+	// The consent attribute is dated by the decision.
 	want := []string{"u1|map[EMAIL:b@x.example]|bl=true", "u1|map[W17_MARKETING_CONSENT:false W17_MARKETING_CONSENT_AT:" + brevoDate(time.Now()) + "]|bl=true"}
 	if strings.Join(f.updates, ";") != strings.Join(want, ";") {
 		t.Errorf("updates = %v\nwant      %v", f.updates, want)
@@ -702,7 +723,7 @@ func TestContacts_FollowTheAccounts(t *testing.T) {
 // The consent for a user Brevo does not know yet creates the contact with it.
 func TestContacts_ConsentBeforeTheContactCreatesIt(t *testing.T) {
 	f := &fakeBrevo{}
-	_ = tool(t, f, &ledger{}, "all", "", "").onConsentChanged(context.Background(), &pb.AuthMarketingConsentChanged{UserId: "u2", Consent: true})
+	_ = tool(t, f, &ledger{}, "all", "", "").onConsentChanged(context.Background(), &pb.AuthMarketingConsentChanged{UserId: "u2", Consent: true, DecidedAt: timestamppb.Now()})
 	if strings.Join(f.upserts, ";") != "u2||map[W17_MARKETING_CONSENT:true W17_MARKETING_CONSENT_AT:"+brevoDate(time.Now())+"]|bl=false" {
 		t.Errorf("upserts = %v", f.upserts)
 	}
@@ -809,5 +830,169 @@ func TestEventFor_WritesNothingToTheContact(t *testing.T) {
 	}
 	if cp := f.batches[0][0].ContactProperties; len(cp) != 0 {
 		t.Errorf("the event writes to the contact: %v (the kept decision is a no: %+v)", cp, l.contacts["u1"])
+	}
+}
+
+// The attributes the auth events write exist before the plugin subscribes to
+// them: prepareAttributes creates them before it returns (setupBrevo calls it
+// before any registration), so a sign-up handled in the first moments of a
+// fresh account does not write W17_SIGNED_UP_AT into the void, which Brevo
+// drops silently and nothing writes again. The activity attributes, and a
+// fixed one Brevo did not create, follow in the background.
+func TestPrepareAttributes_TheFixedOnesBeforeItReturns(t *testing.T) {
+	f := &fakeBrevo{ensureFails: map[string]int{"W17_MARKETING_CONSENT_AT": 1}}
+	tl := tool(t, f, &ledger{}, "all", "", "")
+	tl.attributes = true
+	stop := tl.prepareAttributes(time.Second, time.Millisecond)
+	defer stop()
+	got := f.ensuredSoFar()
+	want := []string{"W17_MARKETING_CONSENT:boolean", "W17_MARKETING_CONSENT_AT:date", "W17_SIGNED_UP_AT:date"}
+	if len(got) < len(want) || strings.Join(got[:3], ",") != strings.Join(want, ",") {
+		t.Fatalf("ensured when prepareAttributes returned = %v, want %v first", got, want)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !contains(f.ensuredSoFar(), "W17_TASKSBUSINESS_CREATETASK:date") || count(f.ensuredSoFar(), "W17_MARKETING_CONSENT_AT:date") < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the background did not create the rest: %v", f.ensuredSoFar())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A Brevo that does not answer holds the boot up for the bound at most; the
+// attributes are then created in the background.
+func TestPrepareAttributes_AnUnansweringBrevoHoldsTheBootForTheBoundOnly(t *testing.T) {
+	f := &fakeBrevo{ensureBlocks: true}
+	tl := tool(t, f, &ledger{}, "all", "", "")
+	start := time.Now()
+	stop := tl.prepareAttributes(50*time.Millisecond, time.Hour)
+	stop()
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("prepareAttributes took %v with a bound of 50ms", d)
+	}
+}
+
+func contains(xs []string, x string) bool { return count(xs, x) > 0 }
+
+func count(xs []string, x string) int {
+	n := 0
+	for _, v := range xs {
+		if v == x {
+			n++
+		}
+	}
+	return n
+}
+
+// A contact write Brevo refuses for its content (400/422) is not retried —
+// retrying fails the same way — but it is reported as a fault, not only
+// logged: the contact then lacks its address and, for UserCreated, its
+// sign-up date, which nothing writes again (SPEC gap 7).
+func TestContacts_ARefusedContactWriteIsReported(t *testing.T) {
+	var reported []error
+	defer func(prev func(context.Context, error)) { reportFault = prev }(reportFault)
+	reportFault = func(_ context.Context, err error) { reported = append(reported, err) }
+
+	ctx := context.Background()
+	refused := tool(t, &fakeBrevo{callErr: &brevo.Error{Status: 400, Message: "duplicate_parameter"}}, &ledger{}, "all", "", "")
+	if err := refused.onUserCreated(ctx, &pb.AuthUserCreated{UserId: "u1", Email: "a@x.example"}); err != nil {
+		t.Fatalf("a refusal = %v, want nil", err)
+	}
+	if len(reported) != 1 || !strings.Contains(reported[0].Error(), "u1") || !brevo.Refused(reported[0]) {
+		t.Errorf("reported = %v, want the one refusal, naming the user", reported)
+	}
+	reported = nil
+	transient := tool(t, &fakeBrevo{callErr: &brevo.Error{Status: 503}}, &ledger{}, "all", "", "")
+	if err := transient.onUserCreated(ctx, &pb.AuthUserCreated{UserId: "u2", Email: "b@x.example"}); err == nil {
+		t.Fatal("a transient failure was swallowed")
+	}
+	if len(reported) != 0 {
+		t.Errorf("a transient failure (redelivered) was reported as a lost write: %v", reported)
+	}
+}
+
+// Recording one sent record failing does not resend the rest of its chunk:
+// every record Brevo answered for is recorded, a failed record is tried
+// again at once, and only one that still fails is left for the redelivery —
+// which then sends it alone, not what came after it in the chunk.
+func TestConsumeMarketing_AFailedRecordResendsOnlyItself(t *testing.T) {
+	f, l := &fakeBrevo{}, &ledger{sent: map[string]bool{}, recordFails: map[string]int{"02": 1}}
+	tl := tool(t, f, l, "all", "", "")
+	b := batch(record(1, createTask, "u1"), record(2, createTask, "u1"), record(3, createTask, "u1"))
+	if err := tl.ConsumeMarketing(context.Background(), b); err != nil {
+		t.Fatalf("a record that failed once and then landed: %v", err)
+	}
+	if len(f.batches) != 1 || !l.sent["01"] || !l.sent["02"] || !l.sent["03"] {
+		t.Fatalf("batches %d, sent %v; want one batch and all three recorded", len(f.batches), l.sent)
+	}
+
+	f, l = &fakeBrevo{}, &ledger{sent: map[string]bool{}, recordFails: map[string]int{"02": 1000}}
+	tl = tool(t, f, l, "all", "", "")
+	if err := tl.ConsumeMarketing(context.Background(), b); err == nil {
+		t.Fatal("a record that cannot be recorded returned nil — it would be resent with no error")
+	}
+	if !l.sent["01"] || !l.sent["03"] || l.sent["02"] {
+		t.Fatalf("sent = %v; want 01 and 03 recorded although 02 failed", l.sent)
+	}
+	l.recordFails = nil
+	if err := tl.ConsumeMarketing(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.batches) != 2 || len(f.batches[1]) != 1 {
+		t.Errorf("the redelivery sent %d batches, the last of %d events; want the one unrecorded event alone", len(f.batches), len(f.batches[len(f.batches)-1]))
+	}
+}
+
+// brevo/no-personal-extras: the referrer goes to Brevo as its origin and
+// path only — a query string or fragment can carry an address, a token, a
+// document's name — and a UTM value is bounded, so a personalised link does
+// not ship its parameters into the marketing tool with every request.
+func TestEventFor_TheReferrerWithoutItsQueryAndBoundedUTM(t *testing.T) {
+	long := strings.Repeat("x", 600)
+	ev, ok := eventFor(&w17pb.RequestEventMeta{
+		UserId: "u1", Method: createTask,
+		Client: &w17pb.RequestClient{
+			Referrer: "https://mail.example/inbox/doc.pdf?to=a%40x.example&token=s3cret#p2",
+			Utm:      map[string]string{"source": "news", "content": long, long: "v"},
+		},
+	})
+	if !ok {
+		t.Fatal("no event")
+	}
+	if got := ev.EventProperties["referrer"]; got != "https://mail.example/inbox/doc.pdf" {
+		t.Errorf("referrer = %v, want its origin and path only", got)
+	}
+	if got, _ := ev.EventProperties["utm_content"].(string); len(got) != maxUTMValue {
+		t.Errorf("utm_content has %d characters, want it cut at %d", len(got), maxUTMValue)
+	}
+	for k := range ev.EventProperties {
+		if len(k) > 4+maxUTMValue {
+			t.Errorf("a property name of %d characters", len(k))
+		}
+	}
+	if ev.EventProperties["utm_source"] != "news" {
+		t.Errorf("utm_source = %v", ev.EventProperties["utm_source"])
+	}
+	ev, _ = eventFor(&w17pb.RequestEventMeta{UserId: "u1", Method: createTask, Client: &w17pb.RequestClient{Referrer: "not a url\x7f"}})
+	if r, ok := ev.EventProperties["referrer"]; ok {
+		t.Errorf("an unparsable referrer was sent: %v", r)
+	}
+}
+
+// A consent event without decided_at cannot be ordered against the decision
+// kept: dated by its handling it would be the newest on every redelivery, and
+// an older no (or yes) delivered again would overwrite a newer decision. It is
+// acknowledged and changes nothing. (auth always dates the decision.)
+func TestConsent_AnUndatedDecisionIsIgnored(t *testing.T) {
+	f := &fakeBrevo{known: map[string]bool{"u1": true}}
+	l := &ledger{contacts: map[string]*pb.ContactRow{"u1": {UserId: "u1", Consent: true, ConsentAt: timestamppb.New(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))}}}
+	if err := tool(t, f, l, "all", "", "").onConsentChanged(context.Background(), &pb.AuthMarketingConsentChanged{UserId: "u1", Consent: false}); err != nil {
+		t.Fatalf("an undated decision: %v, want it acknowledged", err)
+	}
+	if c := l.contacts["u1"]; !c.GetConsent() || !c.GetConsentAt().AsTime().Equal(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("row = %+v, want the dated yes kept", c)
+	}
+	if len(f.updates)+len(f.upserts) != 0 {
+		t.Errorf("an undated decision wrote to Brevo: %v %v", f.updates, f.upserts)
 	}
 }

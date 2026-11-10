@@ -569,7 +569,8 @@ func containsRole(roles []*pb.ApiRealmRole, id string) bool {
 }
 
 // ListBots returns the machine accounts for an operator's directory.
-func (h *AuthServiceHandler) ListBots(ctx context.Context, _ *pb.ListBotsReq) (*pb.ListBotsResp, error) {
+func (h *AuthServiceHandler) ListBots(ctx context.Context, _ *pb.ListBotsReq) (_ *pb.ListBotsResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -624,7 +625,8 @@ func (h *AuthServiceHandler) ListBots(ctx context.Context, _ *pb.ListBotsReq) (*
 var botSummaryFill func(ctx context.Context, h *AuthServiceHandler, bot *pb.BotSummary) error
 
 // ListBotRoles returns the roles a machine account may hold — API-realm only.
-func (h *AuthServiceHandler) ListBotRoles(ctx context.Context, _ *pb.ListBotRolesReq) (*pb.ListBotRolesResp, error) {
+func (h *AuthServiceHandler) ListBotRoles(ctx context.Context, _ *pb.ListBotRolesReq) (_ *pb.ListBotRolesResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

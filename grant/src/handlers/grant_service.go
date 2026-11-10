@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
 
 	pb "github.com/wandering-compiler/plugins/grant/gen/pb"
@@ -88,12 +89,25 @@ func safeURL(v string) bool {
 	return false
 }
 
+// beforeAnyWrite marks an UNAVAILABLE answered before the call wrote
+// anything (a read) as replay-safe (grpcerr.ReplaySafe): a w17 client then
+// sends the call again, which it does not do for a handler's UNAVAILABLE
+// otherwise — one a write answered may follow the write. Any other error is
+// returned as it is.
+func beforeAnyWrite(err error) error {
+	if status.Code(err) == codes.Unavailable {
+		return grpcerr.ReplaySafe(err)
+	}
+	return err
+}
+
 func invalid(field, why string) error {
 	return status.Errorf(codes.InvalidArgument, "grant: %s: %s", field, why)
 }
 
 // ProposeEnvelope writes a new proposed version for the organization the
-// caller acts in. It is shown nowhere until the backoffice approves it.
+// caller acts in. It is shown nowhere until the backoffice approves it, and
+// refused while another proposal of the organization waits.
 func (h *GrantServiceHandler) ProposeEnvelope(ctx context.Context, req *pb.ProposeEnvelopeReq) (*pb.EnvelopeVersion, error) {
 	caller, orgID, err := inOrg(ctx)
 	if err != nil {
@@ -105,6 +119,15 @@ func (h *GrantServiceHandler) ProposeEnvelope(ctx context.Context, req *pb.Propo
 	}
 	if err := checkFields(f); err != nil {
 		return nil, err
+	}
+	// One proposal per organization waits at a time. Without it a member
+	// proposing in a loop grew the backoffice's list, and the table (nothing
+	// is deleted), without bound. Read, then written: two proposals racing
+	// for one organization can both land (SPEC.md, Gaps).
+	if _, err := h.Query.GetPendingEnvelope(ctx, &pb.GetPendingEnvelopeReq{OrgId: orgID}); err == nil {
+		return nil, status.Error(codes.FailedPrecondition, "grant: a proposal of this organization is already waiting for a decision; propose again once it is decided")
+	} else if status.Code(err) != codes.NotFound {
+		return nil, beforeAnyWrite(err)
 	}
 	resp, err := h.Mutation.InsertEnvelope(ctx, &pb.InsertEnvelopeReq{
 		OrgId: orgID, ProposedBy: caller,
@@ -119,7 +142,7 @@ func (h *GrantServiceHandler) ProposeEnvelope(ctx context.Context, req *pb.Propo
 	return &pb.EnvelopeVersion{Id: resp.GetId(), OrgId: orgID, Status: StatusProposed, Fields: f}, nil
 }
 
-// GetMyEnvelopes is every version of the caller's organization, newest
+// GetMyEnvelopes is the caller's organization's newest 100 versions, newest
 // first: what is shown, what waits, what was refused and why.
 func (h *GrantServiceHandler) GetMyEnvelopes(ctx context.Context, _ *pb.GetMyEnvelopesReq) (*pb.EnvelopeVersionsResp, error) {
 	_, orgID, err := inOrg(ctx)
@@ -128,19 +151,20 @@ func (h *GrantServiceHandler) GetMyEnvelopes(ctx context.Context, _ *pb.GetMyEnv
 	}
 	rows, err := h.Query.ListOrgEnvelopes(ctx, &pb.ListOrgEnvelopesReq{OrgId: orgID})
 	if err != nil && status.Code(err) != codes.NotFound {
-		return nil, err
+		return nil, beforeAnyWrite(err)
 	}
 	return versions(rows.GetEnvelopes()), nil
 }
 
-// ListEnvelopeProposals is what waits for the backoffice.
+// ListEnvelopeProposals is what waits for the backoffice: the oldest 200,
+// oldest first.
 func (h *GrantServiceHandler) ListEnvelopeProposals(ctx context.Context, _ *pb.ListEnvelopeProposalsReq) (*pb.EnvelopeVersionsResp, error) {
 	if _, err := h.realmOnly(ctx, "ListEnvelopeProposals"); err != nil {
 		return nil, err
 	}
 	rows, err := h.Query.ListPendingEnvelopes(ctx, &pb.ListPendingEnvelopesReq{})
 	if err != nil && status.Code(err) != codes.NotFound {
-		return nil, err
+		return nil, beforeAnyWrite(err)
 	}
 	return versions(rows.GetEnvelopes()), nil
 }
@@ -160,7 +184,7 @@ func (h *GrantServiceHandler) ApproveEnvelope(ctx context.Context, req *pb.Appro
 	if err != nil {
 		return nil, err
 	}
-	return &pb.EnvelopeVersion{Id: resp.GetId(), OrgId: resp.GetOrgId(), Status: StatusApproved}, nil
+	return decidedVersion(resp), nil
 }
 
 // RejectEnvelope refuses a proposal, with a note for the organization.
@@ -173,7 +197,23 @@ func (h *GrantServiceHandler) RejectEnvelope(ctx context.Context, req *pb.Reject
 	if err != nil {
 		return nil, err
 	}
-	return &pb.EnvelopeVersion{Id: resp.GetId(), Status: StatusRejected, DecisionNote: req.GetNote()}, nil
+	return decidedVersion(resp), nil
+}
+
+// decidedVersion is the version a decision wrote, as its RETURNING read it:
+// the whole of it, so the backoffice shows what it decided without listing
+// again.
+func decidedVersion(d *pb.DecidedEnvelope) *pb.EnvelopeVersion {
+	return &pb.EnvelopeVersion{
+		Id: d.GetId(), OrgId: d.GetOrgId(), Status: d.GetStatus(),
+		Fields: &pb.EnvelopeFields{
+			DisplayName: d.GetDisplayName(), LogoLightUrl: d.GetLogoLightUrl(), LogoDarkUrl: d.GetLogoDarkUrl(),
+			VerifiedHost: d.GetVerifiedHost(), WebsiteUrl: d.GetWebsiteUrl(), SupportUrl: d.GetSupportUrl(),
+			PrivacyUrl: d.GetPrivacyUrl(), TermsUrl: d.GetTermsUrl(), AccentColor: d.GetAccentColor(),
+			DefaultLanguage: d.GetDefaultLanguage(), OperatedBy: d.GetOperatedBy(),
+		},
+		ProposedAt: d.GetProposedAt(), DecidedAt: d.GetDecidedAt(), DecisionNote: d.GetDecisionNote(),
+	}
 }
 
 // GetOrgEnvelope is an organization's APPROVED envelope; found = false when
@@ -188,7 +228,13 @@ func (h *GrantServiceHandler) approved(ctx context.Context, orgID string) (*pb.P
 		return &pb.PublicEnvelope{OrgId: orgID}, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, beforeAnyWrite(err)
+	}
+	// A proposal always names the organization (checkFields); a row seeded by
+	// fixture may not. A nameless envelope is none: the page renders neutrally
+	// rather than a co-brand with no name on it.
+	if strings.TrimSpace(e.GetDisplayName()) == "" {
+		return &pb.PublicEnvelope{OrgId: orgID}, nil
 	}
 	return &pb.PublicEnvelope{Found: true, OrgId: orgID, Fields: publicFields(fieldsOf(e))}, nil
 }

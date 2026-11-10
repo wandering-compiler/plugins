@@ -98,7 +98,9 @@ service ClusterService {
   // Answered by the PROJECT. The new set is delivered to every registered
   // relay at once, and again every few minutes to any it missed; a relay
   // applying a ban closes the banned workers' tunnels, ending their running
-  // work (WORKER_LOST), and refuses their attach, tunnel and renewal.
+  // work (WORKER_LOST), and refuses their attach, tunnel and renewal. Every
+  // id is resolved first: one the registry does not hold refuses the whole
+  // selection (NOT_FOUND, naming it) and nothing is decided.
   rpc BanWorkers(DecideWorkersActionReq) returns (DecideWorkersActionResp) {}
   rpc UnbanWorkers(DecideWorkersActionReq) returns (DecideWorkersActionResp) {}
 

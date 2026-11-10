@@ -148,11 +148,20 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	}
 	name := tmp.Name()
 	defer func() { _ = os.Remove(name) }()
-	if _, err := tmp.Write(data); err != nil {
+	// Mode first, so the key is never readable by others, not even as a
+	// half-written temp file.
+	if err := tmp.Chmod(mode); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("identity: writing %s: %w", path, err)
 	}
-	if err := tmp.Chmod(mode); err != nil {
+	if _, err := writeFile(tmp, data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("identity: writing %s: %w", path, err)
+	}
+	// Synced before the rename: renamed unsynced, a crash can leave the NEW
+	// name pointing at an empty file, which is the truncation this exists
+	// to rule out.
+	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("identity: writing %s: %w", path, err)
 	}
@@ -162,8 +171,16 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := os.Rename(name, path); err != nil {
 		return fmt.Errorf("identity: writing %s: %w", path, err)
 	}
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 	return nil
 }
+
+// writeFile writes a temp file's content; a test seam, so a write failing
+// halfway can be shown to leave nothing behind.
+var writeFile = (*os.File).Write
 
 // IssueWorkerIdentity enrols a worker WITHOUT a registration code: it makes
 // (or keeps) the worker's key in dir and stores a certificate this CA issued

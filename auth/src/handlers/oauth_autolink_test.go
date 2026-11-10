@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
@@ -96,4 +98,67 @@ func (m *autolinkMock) CreateOAuthIdentity(_ context.Context, in *pb.CreateOAuth
 
 func (m *autolinkMock) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
 	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId()}}, nil
+}
+
+// outageIdentityMock: GetOAuthIdentity fails with identityErr; GetUserByEmail
+// answers from autolinkMock (or fails with emailErr), and a link is recorded.
+type outageIdentityMock struct {
+	autolinkMock
+	identityErr error
+	emailErr    error
+	linked      *pb.CreateOAuthIdentityReq
+}
+
+func (m *outageIdentityMock) GetOAuthIdentity(context.Context, *pb.GetOAuthIdentityReq, ...grpc.CallOption) (*pb.GetOAuthIdentityResp, error) {
+	return nil, m.identityErr
+}
+
+func (m *outageIdentityMock) GetUserByEmail(ctx context.Context, in *pb.GetUserByEmailReq, o ...grpc.CallOption) (*pb.GetUserByEmailResp, error) {
+	if m.emailErr != nil {
+		return nil, m.emailErr
+	}
+	return m.autolinkMock.GetUserByEmail(ctx, in, o...)
+}
+
+func (m *outageIdentityMock) CreateOAuthIdentity(_ context.Context, in *pb.CreateOAuthIdentityReq, _ ...grpc.CallOption) (*pb.CreateOAuthIdentityResp, error) {
+	m.linked = in
+	return &pb.CreateOAuthIdentityResp{Identity: &pb.OAuthIdentity{UserId: in.GetUserId()}}, nil
+}
+
+// oauth/outage-is-not-no-row: only NotFound means "no row". A store that
+// failed to answer whether (provider, subject) is linked must not be read as
+// "not linked" — the exchange would then match the asserted address to
+// another account and link the subject there, or (with the address lookup
+// failing too) go on to create an account. The outage is returned, and
+// reaches the wire as one.
+func TestFindOAuthAccount_AnOutageIsNotNoRow(t *testing.T) {
+	down := status.Error(codes.Unavailable, "store down")
+	verified := &pb.User{Id: "u-B", Email: "owner@example.com", EmailVerifiedAt: timestamppb.Now()}
+	for name, m := range map[string]*outageIdentityMock{
+		"identity read fails":             {autolinkMock: autolinkMock{user: verified}, identityErr: down},
+		"address read fails":              {autolinkMock: autolinkMock{user: verified}, identityErr: status.Error(codes.NotFound, "no rows"), emailErr: down},
+		"identity and address reads fail": {identityErr: down, emailErr: down},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := &AuthServiceHandler{Query: m, Mutation: m}
+			id, err := h.findOAuthAccount(context.Background(), "p1", "sub-linked-elsewhere", "owner@example.com", true)
+			if status.Code(err) != codes.Unavailable {
+				t.Fatalf("an outage was read as no row: id=%q err=%v, want the outage", id, err)
+			}
+			if m.linked != nil {
+				t.Errorf("an identity was linked to %s during the outage", m.linked.GetUserId())
+			}
+			if status.Code(oauthRefusal(err)) != codes.Unavailable {
+				t.Errorf("the outage reaches the wire as %v, want Unavailable", status.Code(oauthRefusal(err)))
+			}
+		})
+	}
+
+	// A NotFound from either read is "no row", as before: no identity and no
+	// account means the exchange creates one.
+	m := &outageIdentityMock{identityErr: status.Error(codes.NotFound, "no rows"), emailErr: status.Error(codes.NotFound, "no rows")}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	if id, err := h.findOAuthAccount(context.Background(), "p1", "sub", "new@example.com", true); id != "" || err != nil {
+		t.Fatalf("NotFound from both reads: id=%q err=%v, want no account and no error", id, err)
+	}
 }

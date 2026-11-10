@@ -67,11 +67,12 @@ func LoadOrCreateCA(dir string) (*CA, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
-		return nil, fmt.Errorf("identity: writing %s: %w", keyPath, err)
+	// Whole or not at all, key first, as LoadOrCreateIdentity writes.
+	if err := writeAtomic(keyPath, keyPEM, 0o600); err != nil {
+		return nil, err
 	}
-	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
-		return nil, fmt.Errorf("identity: writing %s: %w", certPath, err)
+	if err := writeAtomic(certPath, certPEM, 0o644); err != nil {
+		return nil, err
 	}
 	return parseCA(certPEM, keyPEM)
 }

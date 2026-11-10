@@ -1956,6 +1956,8 @@ message OrgSignUpPolicyRow {
   google.protobuf.Timestamp set_at = 4;
   // See OrgSignUpPolicy.product_roles.
   string product_roles = 5 [(w17.contrib.plugin_feature_field) = "product_roles"];
+  // See OrgSignUpPolicy.role_snapshot.
+  string role_snapshot = 6;
 }
 
 // The product roles users hold (product_roles) and an organization's plan
@@ -4516,6 +4518,7 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT p.kind AS kind, p.open AS open, p.role AS role, p.set_at AS set_at, "
+          "p.role_snapshot AS role_snapshot, "
           "?feature(product_roles) p.product_roles AS product_roles "
           "FROM @module.OrgSignUpPolicy p "
           "WHERE p.org_id = :org_id AND p.ended_at IS NULL "

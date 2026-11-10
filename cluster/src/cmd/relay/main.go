@@ -244,6 +244,13 @@ type listening struct {
 //
 // A start that FAILS part-way stops whatever it had already started before
 // returning, so nothing keeps serving behind an error.
+// baseServerOptions are what the management and worker-attach servers start
+// from: the panic net, outermost, then the cluster keepalive. (The proxy gets
+// both through tunnel.ProxyServerOptions.)
+func baseServerOptions() []grpc.ServerOption {
+	return append(tunnel.RecoverServerOptions(), tunnel.ServerKeepalive()...)
+}
+
 func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err error) {
 	var undo []func()
 	defer func() {
@@ -361,11 +368,14 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 		}
 		return nil
 	}
-	// Every server here takes tunnel.ServerKeepalive: it pings its peers on
-	// the cluster schedule and accepts their pings (lib/tunnel/keepalive.go).
-	// The management server also applies the ban set every control-plane call
-	// carries, before the call runs (relayserver.BanInterceptors).
-	mgmtOpts := append(tunnel.ServerKeepalive(), relayserver.BanServerOptions(workers)...)
+	// Every server here takes the panic net first (tunnel.RecoverServerOptions:
+	// one bad request must not end the process, and with it every queue,
+	// ticket and attached worker) and tunnel.ServerKeepalive: it pings its
+	// peers on the cluster schedule and accepts their pings
+	// (lib/tunnel/keepalive.go). The management server also applies the ban
+	// set every control-plane call carries, before the call runs
+	// (relayserver.BanInterceptors).
+	mgmtOpts := append(baseServerOptions(), relayserver.BanServerOptions(workers)...)
 	srv := grpc.NewServer(append(mgmtOpts, grpc.Creds(credentials.NewTLS(&tls.Config{
 		Certificates: []tls.Certificate{crt},
 		MinVersion:   tls.VersionTLS13,
@@ -447,7 +457,7 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 	}()
 
 	// The WORKER-ATTACH server: gRPC, worker TLS, its own port.
-	attachSrv := grpc.NewServer(append(tunnel.ServerKeepalive(), grpc.Creds(credentials.NewTLS(attachTLS)))...)
+	attachSrv := grpc.NewServer(append(baseServerOptions(), grpc.Creds(credentials.NewTLS(attachTLS)))...)
 	// Backends is handed over so a worker's declared slots and its readiness
 	// land where scheduling can see them. The attach stream and the tunnel are
 	// separate connections; this is where the two halves meet.

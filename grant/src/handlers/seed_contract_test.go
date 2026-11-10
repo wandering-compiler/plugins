@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -87,6 +88,23 @@ func TestGetOrgEnvelope_LeavesOutAFieldThatBreaksTheRules(t *testing.T) {
 	} {
 		if v != "" {
 			t.Errorf("%s breaks the rules and was served: %q", name, v)
+		}
+	}
+}
+
+// An approved row without a name (a fixture that left display_name blank —
+// a proposal can never be) is no envelope: the public read answers found =
+// false, so a page renders neutrally instead of a nameless co-brand.
+func TestGetOrgEnvelope_ANamelessApprovedRowIsNotFound(t *testing.T) {
+	for _, name := range []string{"", "   "} {
+		s := &store{envelopes: []*pb.EnvelopeRow{{Id: "env-a", OrgId: "org-acme", Status: StatusApproved, DisplayName: name, WebsiteUrl: "https://acme.example"}}}
+		h := &GrantServiceHandler{Query: s, Mutation: s}
+		got, err := h.GetOrgEnvelope(context.Background(), &pb.GetOrgEnvelopeReq{OrgId: "org-acme"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.GetFound() || got.GetFields() != nil || got.GetOrgId() != "org-acme" {
+			t.Errorf("display_name %q: served %+v, want found = false and no fields", name, got)
 		}
 	}
 }

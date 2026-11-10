@@ -2328,8 +2328,20 @@ message SetOrgSignUpPolicyRowReq {
     (w17.field) = { type: TEXT, blank: true },
     (w17.contrib.plugin_feature_field) = "product_roles"
   ];
+  // See OrgSignUpPolicy.role_snapshot ('' on a closed policy).
+  string role_snapshot = 7 [(w17.field) = { type: TEXT, blank: true }];
 }
 message SetOrgSignUpPolicyRowResp {
+  option (w17.contrib.plugin_feature) = "org_signup";
+  string id = 1;
+}
+message PinOrgSignUpPolicySnapshotRowReq {
+  option (w17.contrib.plugin_feature) = "org_signup";
+  string org_id        = 1 [(w17.field) = { type: UUID }];
+  string kind          = 2 [(w17.field) = { type: CHAR, max_len: 32, blank: true }];
+  string role_snapshot = 3 [(w17.field) = { type: TEXT }];
+}
+message PinOrgSignUpPolicySnapshotRowResp {
   option (w17.contrib.plugin_feature) = "org_signup";
   string id = 1;
 }
@@ -6316,7 +6328,25 @@ service AuthMutation {
           "open = :open, "
           "role = :role, "
           "set_by = :set_by, "
+          "role_snapshot = :role_snapshot, "
           "?feature(product_roles) product_roles = :product_roles "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // PinOrgSignUpPolicySnapshotRow — stores the role snapshot on the live open
+  // policy of (organization, kind) that has none: a policy seeded by fixtures
+  // or set before snapshots were stored, pinned by its first registration
+  // (writeSignUpJoin) as the role reads then. A policy that has one keeps it.
+  rpc PinOrgSignUpPolicySnapshotRow(PinOrgSignUpPolicySnapshotRowReq) returns (PinOrgSignUpPolicySnapshotRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_signup";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgSignUpPolicy SET role_snapshot = :role_snapshot "
+          "WHERE org_id = :org_id AND kind = :kind AND ended_at IS NULL AND open = TRUE AND role_snapshot = '' "
           "RETURNING id AS id"
       }
     };

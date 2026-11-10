@@ -294,7 +294,8 @@ func (h *AuthServiceHandler) callerEmail(ctx context.Context, userID string) (st
 // ORG-SCOPED ONLY. A realm role reaches every organization, so it is not an
 // org admin's to hand out; filtering here rather than in the caller means a
 // second caller cannot forget to.
-func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, req *pb.ListAssignableRolesReq) (*pb.ListAssignableRolesResp, error) {
+func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, req *pb.ListAssignableRolesReq) (_ *pb.ListAssignableRolesResp, err error) {
+	defer markReplaySafe(&err)
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err
 	}
@@ -592,7 +593,8 @@ func (h *AuthServiceHandler) inviteInto(ctx context.Context, orgID, inviter stri
 }
 
 // ListOrgInvites returns the active organization's outstanding invitations.
-func (h *AuthServiceHandler) ListOrgInvites(ctx context.Context, req *pb.ListOrgInvitesReq) (*pb.ListOrgInvitesResp, error) {
+func (h *AuthServiceHandler) ListOrgInvites(ctx context.Context, req *pb.ListOrgInvitesReq) (_ *pb.ListOrgInvitesResp, err error) {
+	defer markReplaySafe(&err)
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err
 	}
@@ -683,7 +685,8 @@ func (h *AuthServiceHandler) RevokeOrgInvite(ctx context.Context, req *pb.Revoke
 
 // ListMyInvites returns the invitations addressed to the CALLER, across
 // every organization — the list a person sees in their own account.
-func (h *AuthServiceHandler) ListMyInvites(ctx context.Context, _ *pb.ListMyInvitesReq) (*pb.ListMyInvitesResp, error) {
+func (h *AuthServiceHandler) ListMyInvites(ctx context.Context, _ *pb.ListMyInvitesReq) (_ *pb.ListMyInvitesResp, err error) {
+	defer markReplaySafe(&err)
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -723,6 +726,13 @@ func (h *AuthServiceHandler) AcceptOrgInvite(ctx context.Context, req *pb.Accept
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
+	}
+	// Joining changes what the PERSON holds — a membership and a role — so
+	// only their session may do it, as only a session mints a token or
+	// changes the password; an API token is refused before anything is read
+	// (org_invite/session-only).
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
 	}
 	email, err := h.callerEmail(ctx, userID)
 	if err != nil {

@@ -103,7 +103,8 @@ func copyTokenType(from, to proto.Message) {
 // ListOrgRoles returns the roles of the caller's organization with what each
 // carries, for the role editor and the pickers. Bots' roles are left out: they
 // are listed with the bots (ListBotRoles).
-func (h *AuthServiceHandler) ListOrgRoles(ctx context.Context, req *pb.ListOrgRolesReq) (*pb.ListOrgRolesResp, error) {
+func (h *AuthServiceHandler) ListOrgRoles(ctx context.Context, req *pb.ListOrgRolesReq) (_ *pb.ListOrgRolesResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

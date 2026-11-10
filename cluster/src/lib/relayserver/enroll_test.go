@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/plugins/cluster/lib/identity"
 	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
@@ -244,4 +246,28 @@ func TestBanInterceptors_ApplyOnlyWhatWasSent(t *testing.T) {
 
 func certPEM(c *x509.Certificate) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})
+}
+
+// A relay that holds no ban set (restarted without a saved one, no control
+// plane has called yet) enrols no one: on an empty set every key reads as
+// admitted, so a banned key with a valid code would buy a fresh certificate.
+// The refusal is Unavailable and does not spend the code — the same code
+// enrols once the set arrives.
+func TestEnroll_RefusedWhileTheRelayHoldsNoBanSet(t *testing.T) {
+	r := newEnrolRig(t)
+	r.reg = workeradmit.New()
+	r.e.Workers = r.reg
+	code := r.code(t)
+	_, csr, _ := identity.NewKeyAndCSR("a")
+	_, err := r.e.Enroll(withPeer(nil), &workerpb.EnrollReq{RegistrationCode: code, Csr: csr, Name: "a"})
+	if got := refusal.ReasonOf(err); got != refusal.BanSetUnknown || status.Code(err) != codes.Unavailable {
+		t.Fatalf("enrolment without a ban set: %v (reason %q), want Unavailable %s", err, got, refusal.BanSetUnknown)
+	}
+	if len(r.reg.Known()) != 0 {
+		t.Errorf("a refused enrolment was recorded as met: %+v", r.reg.Known())
+	}
+	r.reg.SetBanned(nil)
+	if _, err := r.e.Enroll(withPeer(nil), &workerpb.EnrollReq{RegistrationCode: code, Csr: csr, Name: "a"}); err != nil {
+		t.Fatalf("the refusal spent the code: %v", err)
+	}
 }

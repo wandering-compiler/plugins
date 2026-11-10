@@ -5,10 +5,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wandering-compiler/sdk/go/lib/eventlog"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
@@ -126,17 +128,28 @@ func (t *brevoTool) sendEvents(ctx context.Context, selected []*w17pb.RequestEve
 		if err != nil {
 			return fmt.Errorf("marketing plugin: sending %d events to Brevo: %w", len(events), err)
 		}
+		// Refused or accepted, none is to be sent again. Every one is
+		// recorded, whatever happens to another: stopping at the first
+		// failed record left the rest of the chunk — accepted by Brevo —
+		// to be sent again by the redelivery. A failed one is tried again at
+		// once; one that still fails is the only one the redelivery resends.
+		var failed error
 		for i, p := range chunk {
 			if reason, refused := res.Failed[i]; refused {
 				log.Printf("marketing plugin: Brevo refused event %s (record %s): %s", p.event.EventName, p.id, reason)
 			}
-			// Refused or accepted, it is not to be sent again.
-			if err := t.recordSent(ctx, p.id); err != nil {
-				return err
+			var err error
+			for attempt := 0; attempt < recordSentAttempts; attempt++ {
+				if err = t.recordSent(ctx, p.id); err == nil {
+					break
+				}
+			}
+			if err != nil && failed == nil {
+				failed = err
 			}
 		}
 		chunk = chunk[:0]
-		return nil
+		return failed
 	}
 	size := 0
 	for _, p := range todo {
@@ -155,6 +168,10 @@ func (t *brevoTool) sendEvents(ctx context.Context, selected []*w17pb.RequestEve
 	}
 	return flush()
 }
+
+// recordSentAttempts is how often recording one sent record is tried before
+// it is left for the redelivery (which then sends it again).
+const recordSentAttempts = 3
 
 // recordSent remembers a record as sent; one a concurrent replica recorded
 // first is the same outcome.
@@ -220,9 +237,9 @@ func eventFor(meta *w17pb.RequestEventMeta) (brevo.Event, bool) {
 	}
 	if c := meta.GetClient(); c != nil {
 		for k, v := range c.GetUtm() {
-			props["utm_"+eventNameRe.ReplaceAllString(k, "_")] = v
+			props["utm_"+cut(eventNameRe.ReplaceAllString(k, "_"), maxUTMValue)] = cut(v, maxUTMValue)
 		}
-		if r := c.GetReferrer(); r != "" {
+		if r := referrerOf(c.GetReferrer()); r != "" {
 			props["referrer"] = r
 		}
 	}
@@ -240,6 +257,34 @@ func eventFor(meta *w17pb.RequestEventMeta) (brevo.Event, bool) {
 		ev.EventDate = st.AsTime().UTC().Format(time.RFC3339Nano)
 	}
 	return ev, true
+}
+
+// maxUTMValue bounds a UTM parameter's name and value on the event: a
+// campaign label, not a place for whatever a link carries.
+const maxUTMValue = 200
+
+// maxReferrer bounds the referrer on the event.
+const maxReferrer = 500
+
+// referrerOf is the referrer as the event carries it: its scheme, host and
+// path, without user info, query string or fragment — those can carry an
+// address, a token, a document's name, which a personalised link would ship
+// into the marketing tool with every request. "" for one that is no
+// absolute URL.
+func referrerOf(r string) string {
+	u, err := url.Parse(r)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return cut((&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String(), maxReferrer)
+}
+
+// cut is s cut to at most n runes.
+func cut(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n])
 }
 
 // approxSize estimates an event's share of a batch body.

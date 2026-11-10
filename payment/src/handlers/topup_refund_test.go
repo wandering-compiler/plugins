@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -140,5 +141,32 @@ func TestFlow_RefusedTopUpRefundWithAFailedUndo_KeepsTheProviderTextInside(t *te
 		if strings.Contains(err.Error(), leak) {
 			t.Errorf("the answer carries %q: %v", leak, err)
 		}
+	}
+}
+
+// A top-up refund that fails transiently at the provider keeps the credit
+// taken, for the caller's retry (the provider may have refunded). A caller
+// that never retries leaves the credit taken with no refund made; the
+// project's ReconcileProvider run over the top-up gives it back — the
+// reconciliation of a top-up (settleTopup) brings the credit to what the
+// payment's refunds leave of it, and none was made.
+func TestFlow_ANeverRetriedTransientTopUpRefund_IsGivenBackByTheProviderReconciliation(t *testing.T) {
+	r := newRig(t)
+	p := grantedTopUp(t, r, 100000)
+	r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false) // what the provider shows of a paid top-up
+	r.stripe.failNext(http.StatusInternalServerError)
+	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 40000, IdempotencyKey: "rt"})
+	wantCode(t, err, codes.Unavailable, "a refund the provider failed transiently")
+	if got := r.store.balance(t, "user-a"); got != 60000 {
+		t.Fatalf("setup: balance = %d, want 6.0000 (the credit kept taken for the retry)", got)
+	}
+	if got := r.stripe.intent(p.GetProviderPaymentId()).refunded; got != 0 {
+		t.Fatalf("setup: the provider refunded %d", got)
+	}
+	if _, err := r.h.ReconcileProvider(bg, &pb.ReconcileProviderReq{Since: fromTheStart}); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.store.balance(t, "user-a"); got != 100000 {
+		t.Errorf("balance = %d after the provider reconciliation, want 10.0000 (no refund was made)", got)
 	}
 }

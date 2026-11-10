@@ -813,12 +813,14 @@ func TestFlow_Refunds(t *testing.T) {
 	// Over-refund: the provider refuses; it is the caller's error.
 	_, err = refund(150000, "r-3")
 	wantCode(t, err, codes.InvalidArgument, "refund above the unrefunded amount")
-	// "Full" after partials asks for the whole original amount — refused
-	// the same way, never recorded.
-	_, err = refund(0, "r-4")
-	wantCode(t, err, codes.InvalidArgument, "full refund after partials")
-	if n := r.store.count("refunds"); n != 2 {
-		t.Errorf("refund rows = %d, want 2", n)
+	// No amount after partials is what remains, as the provider's own
+	// refund without an amount: the other 10.
+	rest, err := refund(0, "r-4")
+	if err != nil || rest.GetRefund().GetAmount() != 100000 {
+		t.Fatalf("refund of the rest after partials = %v, %v; want 10.0000", rest, err)
+	}
+	if n := r.store.count("refunds"); n != 3 {
+		t.Errorf("refund rows = %d, want 3", n)
 	}
 	if rf := a.GetRefund(); rf.GetCurrency() != "usd" || rf.GetAmount() != 50000 || rf.GetPaymentId() != p.GetId() {
 		t.Errorf("refund row = %+v", rf)
@@ -1457,5 +1459,34 @@ func TestFlow_Credit_GrantPastTheAmountRangeIsRefused(t *testing.T) {
 	// Up to the edge still lands.
 	if v, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "g-edge"}); err != nil || v.GetBalance() != math.MaxInt64 {
 		t.Fatalf("grant to MaxInt64: %v %v", v, err)
+	}
+}
+
+// A value the local row cannot hold is refused before the provider is asked,
+// not by the insert after it: a description past the column's 500 characters
+// (the provider takes 1000) and a customer address that is not one, or past
+// 320 characters. Refused after the provider call, a retry under the same key
+// replayed the same intent and failed the same way for ever, an orphan per key.
+func TestFlow_ColumnRefusalsNeverReachTheProvider(t *testing.T) {
+	r := newRig(t)
+	long := strings.Repeat("é", 501)
+	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 10000, Currency: "usd", IdempotencyKey: "k", Description: long})
+	wantCode(t, err, codes.InvalidArgument, "a description of 501 characters")
+	if n := r.stripe.count("/v1/payment_intents"); n != 0 {
+		t.Errorf("the provider was asked %d time(s) for a description the row cannot hold", n)
+	}
+	if _, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 10000, Currency: "usd", IdempotencyKey: "k2", Description: strings.Repeat("é", 500)}); err != nil {
+		t.Errorf("a description of exactly 500 characters: %v", err)
+	}
+	for _, email := range []string{"not-an-address", strings.Repeat("a", 310) + "@example.com"} {
+		before := r.stripe.count("/v1/customers")
+		_, err := r.h.CreateCustomer(bg, &pb.NewCustomerReq{UserId: "user-b", Email: email})
+		wantCode(t, err, codes.InvalidArgument, "customer email "+email[:10])
+		if n := r.stripe.count("/v1/customers"); n != before {
+			t.Errorf("the provider was asked to create a customer for %q", email[:10])
+		}
+	}
+	if _, err := r.h.CreateCustomer(bg, &pb.NewCustomerReq{UserId: "user-b", Email: "b@example.com"}); err != nil {
+		t.Errorf("a sound address: %v", err)
 	}
 }

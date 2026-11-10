@@ -8,11 +8,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/wandering-compiler/sdk/go/lib/typere"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -99,7 +101,7 @@ func (h *PaymentServiceHandler) CreateCustomer(ctx context.Context, req *pb.NewC
 	}
 	got, err := h.Query.GetCustomerByUserId(ctx, &pb.GetCustomerByUserIdReq{UserId: req.GetUserId()})
 	if err != nil && !absent(err) {
-		return nil, err
+		return nil, beforeAnyEffect(err)
 	}
 	if c := got.GetCustomer(); c != nil {
 		return &pb.NewCustomerResp{Customer: c}, nil
@@ -119,6 +121,11 @@ func (h *PaymentServiceHandler) CreateCustomer(ctx context.Context, req *pb.NewC
 // or a racing twin within its window instead of a second, unreferenced one;
 // a different address is a different create, and a different key.
 func (h *PaymentServiceHandler) createCustomer(ctx context.Context, userID, email string) (*pb.Customer, error) {
+	// The address the row will hold is checked before the provider customer
+	// exists, not by the insert after it.
+	if email != "" && (utf8.RuneCountInString(email) > maxEmail || !typere.ValidEmail(email)) {
+		return nil, invalidArg("email is not an address the customer can be recorded with")
+	}
 	install := h.installID()
 	providerID, err := h.Backend.EnsureCustomer(ctx, backend.CustomerSpec{
 		UserID: userID, Email: email, Install: install,
@@ -174,6 +181,12 @@ func (h *PaymentServiceHandler) CreatePayment(ctx context.Context, req *pb.Charg
 	if err := idempotencyKeyTooLong(req.GetIdempotencyKey()); err != nil {
 		return nil, err
 	}
+	// Checked here, not by the insert after the provider call: refused there,
+	// the intent already existed and a retry under the key replayed it and
+	// failed the same way, for ever.
+	if utf8.RuneCountInString(req.GetDescription()) > maxDescription {
+		return nil, invalidArg(fmt.Sprintf("description is longer than %d characters", maxDescription))
+	}
 
 	cust, err := h.resolveCustomer(ctx, req.GetUserId())
 	if err != nil {
@@ -185,6 +198,13 @@ func (h *PaymentServiceHandler) CreatePayment(ctx context.Context, req *pb.Charg
 	}
 	return &pb.ChargeResp{Payment: payment, ClientSecret: clientSecret}, nil
 }
+
+// maxDescription and maxEmail are the max_len of Payment.description and
+// Customer.email (proto/types/models.proto), in characters.
+const (
+	maxDescription = 500
+	maxEmail       = 320
+)
 
 // chargeCurrency normalises a request currency, falling back to the
 // configured default, and refuses anything that is not a 3-letter code.
@@ -393,8 +413,10 @@ var isTopupPayment = func(ctx context.Context, h *PaymentServiceHandler, p *pb.P
 	return false, nil
 }
 
-// RefundPayment reverses a payment (full when amount is empty), via the
-// provider, and records the local Refund.
+// RefundPayment reverses a payment, via the provider, and records the local
+// Refund. An empty amount refunds what remains of the payment — all of it, or
+// the rest after partial refunds, as the provider's own refund without an
+// amount does — resolved under the payment's row lock.
 func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.RefundPaymentReq) (*pb.RefundPaymentResp, error) {
 	if req.GetPaymentId() == "" {
 		return nil, invalidArg("payment_id is required")
@@ -415,19 +437,21 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	// one used to go to the provider as is.
 	amount := req.GetAmount()
 	if amount != 0 && !isPositiveAmount(amount) {
-		return nil, invalidArg("amount must be positive (or 0 for a full refund)")
+		return nil, invalidArg("amount must be positive (or 0 for what remains of the payment)")
 	}
+	// Until the lock below, nothing is written and nothing is asked of the
+	// provider but reads: an UNAVAILABLE here is replay-safe.
 	got, err := h.Query.GetPayment(ctx, &pb.GetPaymentReq{Id: req.GetPaymentId()})
 	if err != nil {
-		return nil, err
+		return nil, beforeAnyEffect(err)
 	}
 	payment := got.GetPayment()
 	if payment == nil {
 		return nil, notFound("payment not found")
 	}
-	if amount == 0 {
-		amount, _ = refundBasis(payment) // full refund: what the payment took
-	}
+	// amount = 0 is "what remains": resolved under the lock (refundAllowed);
+	// the key lookups below judge a refund the key already names by restOf.
+	rest := amount == 0
 
 	// The key is looked up HERE, before the provider is asked. The provider
 	// remembers an idempotency key for a day; a retry after that used to
@@ -436,7 +460,12 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	storedKey := refundKey(req.GetIdempotencyKey())
 	if prior, err := h.refundByKey(ctx, storedKey); err != nil || prior != nil {
 		if err != nil {
-			return nil, err
+			return nil, beforeAnyEffect(err)
+		}
+		if rest {
+			if amount, err = h.restOf(ctx, payment, prior.GetAmount(), prior); err != nil {
+				return nil, beforeAnyEffect(err)
+			}
 		}
 		resp, err := sameRefund(prior, payment, amount)
 		if err != nil {
@@ -472,7 +501,16 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	// refund's metadata recognises it, so ask before refunding again.
 	res, found, err := h.Backend.FindRefund(ctx, payment.GetProviderPaymentId(), req.GetIdempotencyKey())
 	if err != nil {
-		return nil, providerFailure(err)
+		return nil, beforeAnyEffect(providerFailure(err))
+	}
+	if found && rest {
+		local, err := h.Query.GetRefundByProviderId(ctx, &pb.GetRefundByProviderIdReq{ProviderRefundId: res.ProviderRefundID})
+		if err != nil && !absent(err) {
+			return nil, beforeAnyEffect(err)
+		}
+		if amount, err = h.restOf(ctx, payment, res.Amount.Amount, local.GetRefund()); err != nil {
+			return nil, beforeAnyEffect(err)
+		}
 	}
 	if found && res.Amount.Amount != amount {
 		// The key names a refund of another amount, which the provider's
@@ -492,8 +530,10 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		// connection. Written on another connection, that check waits for
 		// the lock this call holds until the transaction times out.
 		err = h.underRefundLock(ctx, payment.GetId(), func(ctx, txCtx context.Context, locked *pb.LockPaymentForRefundResp) (bool, error) {
-			if err := h.refundAllowed(ctx, txCtx, payment, locked, amount); err != nil {
-				return false, err
+			var err error
+			if amount, err = h.refundAllowed(ctx, txCtx, payment, locked, req.GetAmount()); err != nil {
+				// Reads only, in a transaction that is rolled back.
+				return false, beforeAnyEffect(err)
 			}
 			// A top-up's credit leaves with its money (prepaid; no-op
 			// otherwise). Taken before the provider is asked, so a refund of
@@ -566,7 +606,7 @@ func (h *PaymentServiceHandler) underRefundLock(ctx context.Context, paymentID s
 		if err == nil && locked.GetId() == "" {
 			err = notFound("payment not found")
 		}
-		return err
+		return beforeAnyEffect(err) // the lock alone; the transaction is rolled back
 	}, func(ctx, txCtx context.Context) (bool, error) {
 		return fn(ctx, txCtx, locked)
 	})
@@ -609,9 +649,16 @@ func (h *PaymentServiceHandler) inLockedTx(ctx context.Context, lock func(txCtx 
 	}
 	work, cancel := context.WithTimeout(ctx, refundLockTimeout-lockedWorkMargin)
 	defer cancel()
+	// READ COMMITTED, asked for rather than inherited: the guards read what
+	// the previous lock holder committed after the lock is granted. Under the
+	// connection's default — REPEATABLE READ when a project sets
+	// default_transaction_isolation so — the snapshot is taken by the lock
+	// statement BEFORE it waits, and the refunded sum would miss the refund
+	// the previous holder recorded.
 	tx, txCtx, err := distx.Begin(work, h.DistTx, &distxpb.BeginRequest{
 		ConnectionName: h.Connection,
 		TxTimeoutMs:    int32(refundLockTimeout / time.Millisecond),
+		Isolation:      distxpb.Isolation_READ_COMMITTED,
 	})
 	if err != nil {
 		return err
@@ -647,6 +694,9 @@ func (h *PaymentServiceHandler) inLockedTx(ctx context.Context, lock func(txCtx 
 //   - an amount past what remains — the payment's amount less its PENDING and
 //     SUCCEEDED refunds: InvalidArgument (base/refund-within-captured).
 //
+// It answers the amount to refund: amount, or for amount = 0 what remains
+// (InvalidArgument when nothing does).
+//
 // A REFUNDED payment is judged by what remains: a refund that failed after
 // the payment was settled refunded leaves the rest refundable. A payment held
 // at AMOUNT_MISMATCH is judged by what it took (received_amount, in
@@ -656,7 +706,7 @@ func (h *PaymentServiceHandler) inLockedTx(ctx context.Context, lock func(txCtx 
 //
 // locked is the payment row read under the lock; the sum is read under it
 // too, so a refund recorded by the refund before this one is counted.
-func (h *PaymentServiceHandler) refundAllowed(ctx, txCtx context.Context, payment *pb.Payment, locked *pb.LockPaymentForRefundResp, amount int64) error {
+func (h *PaymentServiceHandler) refundAllowed(ctx, txCtx context.Context, payment *pb.Payment, locked *pb.LockPaymentForRefundResp, amount int64) (int64, error) {
 	took, currency := locked.GetAmount(), payment.GetCurrency()
 	switch st := pb.Payment_Status(locked.GetStatus()); st {
 	case pb.Payment_SUCCEEDED, pb.Payment_REFUNDED:
@@ -667,44 +717,81 @@ func (h *PaymentServiceHandler) refundAllowed(ctx, txCtx context.Context, paymen
 		// is a corrupt record, and judging a refund against no amount would
 		// be a guess.
 		if took <= 0 || currency == "" {
-			return status.Errorf(codes.FailedPrecondition, "payment %s is held at AMOUNT_MISMATCH but records no received amount; it cannot be refunded until it is reconciled", payment.GetId())
+			return 0, status.Errorf(codes.FailedPrecondition, "payment %s is held at AMOUNT_MISMATCH but records no received amount; it cannot be refunded until it is reconciled", payment.GetId())
 		}
 	case pb.Payment_FAILED, pb.Payment_CANCELED:
-		return status.Errorf(codes.FailedPrecondition, "payment %s did not succeed (%s); there is nothing to refund", payment.GetId(), st)
+		return 0, status.Errorf(codes.FailedPrecondition, "payment %s did not succeed (%s); there is nothing to refund", payment.GetId(), st)
 	default:
 		obj, err := h.Backend.GetPayment(ctx, payment.GetProviderPaymentId())
 		if err != nil {
-			return providerFailure(err)
+			return 0, providerFailure(err)
 		}
 		if obj.Status != "succeeded" {
-			return status.Errorf(codes.FailedPrecondition, "payment %s has not succeeded at the provider (%s); it cannot be refunded yet", payment.GetId(), obj.Status)
+			return 0, status.Errorf(codes.FailedPrecondition, "payment %s has not succeeded at the provider (%s); it cannot be refunded yet", payment.GetId(), obj.Status)
 		}
-		if r := obj.Received; r.Currency != "" && (!strings.EqualFold(r.Currency, currency) || r.Amount != took) {
-			return status.Errorf(codes.FailedPrecondition, "payment %s took %s %s at the provider, not the %s %s asked; it is being held — retry once its webhook has arrived",
+		// A success nobody can check is not trusted, as on the webhook path
+		// (holdAmountMismatch): without what it took, it could have taken
+		// another amount, and the refund would be judged against a guess.
+		if obj.Received.Currency == "" {
+			return 0, status.Errorf(codes.FailedPrecondition, "payment %s: the provider reported no received amount; it cannot be refunded until its webhook has arrived", payment.GetId())
+		}
+		if r := obj.Received; !strings.EqualFold(r.Currency, currency) || r.Amount != took {
+			return 0, status.Errorf(codes.FailedPrecondition, "payment %s took %s %s at the provider, not the %s %s asked; it is being held — retry once its webhook has arrived",
 				payment.GetId(), fmtAmount(r.Amount), r.Currency, fmtAmount(took), currency)
 		}
 	}
 	// The refund is made in the currency of the payment as read before the
 	// lock; a payment held in the meantime may have taken another one.
 	if !strings.EqualFold(currency, refundCurrency(payment)) {
-		return status.Errorf(codes.FailedPrecondition, "payment %s changed while the refund waited; retry", payment.GetId())
+		return 0, status.Errorf(codes.FailedPrecondition, "payment %s changed while the refund waited; retry", payment.GetId())
 	}
 	sum, err := h.Query.SumRefundsForPayment(txCtx, &pb.SumRefundsForPaymentReq{PaymentId: payment.GetId()})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	remaining, ok := subAmounts(took, sum.GetTotal())
 	if !ok {
-		return errAmountOverflow("the refunded total of payment " + payment.GetId())
+		return 0, errAmountOverflow("the refunded total of payment " + payment.GetId())
+	}
+	if amount == 0 {
+		if remaining <= 0 {
+			return 0, status.Errorf(codes.InvalidArgument, "nothing remains to refund of payment %s: %s %s refunded already",
+				payment.GetId(), fmtAmount(took), currency)
+		}
+		return remaining, nil
 	}
 	if remaining < amount {
 		if remaining < 0 {
 			remaining = 0
 		}
-		return status.Errorf(codes.InvalidArgument, "a refund of %s exceeds what remains of payment %s: %s of %s %s",
+		return 0, status.Errorf(codes.InvalidArgument, "a refund of %s exceeds what remains of payment %s: %s of %s %s",
 			fmtAmount(amount), payment.GetId(), fmtAmount(remaining), fmtAmount(took), currency)
 	}
-	return nil
+	return amount, nil
+}
+
+// restOf answers a refund of "what remains" (amount = 0) whose key already
+// names a refund of got — the recorded row prior, or one the provider made
+// under the key (prior is then its local row, when the webhook recorded one):
+// got, when that refund and every OTHER refund that counts make up what the
+// payment took — with it, nothing remains, which is what the request asks
+// for; otherwise an amount no refund has, so the request is refused
+// (sameRefund, the provider check), since the key then names a refund that
+// left something unrefunded.
+func (h *PaymentServiceHandler) restOf(ctx context.Context, payment *pb.Payment, got int64, prior *pb.Refund) (int64, error) {
+	sum, err := h.Query.SumRefundsForPayment(ctx, &pb.SumRefundsForPaymentReq{PaymentId: payment.GetId()})
+	if err != nil {
+		return 0, err
+	}
+	others := sum.GetTotal()
+	if prior != nil && refundCounts(prior.GetStatus()) {
+		others -= prior.GetAmount()
+	}
+	basis, _ := refundBasis(payment)
+	if was, ok := subAmounts(basis, others); ok && was == got {
+		return got, nil
+	}
+	return -1, nil
 }
 
 // refundBasis is what a refund of p can return at most, and in which
@@ -878,7 +965,7 @@ func refundKey(callerKey string) string {
 
 // sameRefund answers a request whose key already names a recorded refund:
 // that refund, when it is the one the request asks for (same payment, same
-// amount by value — a full refund's amount is the payment's); otherwise a
+// amount by value — for "what remains", the amount restOf resolved); otherwise a
 // refusal. Returning it regardless (as the lookup used to) answered a retry
 // for 6 under the key of a refund of 4 with the refund of 4 and no error —
 // the caller believed 6 had gone back.

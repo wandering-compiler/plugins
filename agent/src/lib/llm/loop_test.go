@@ -172,6 +172,28 @@ func TestAnOverBudgetRoundAppliesNothing(t *testing.T) {
 	}
 }
 
+// Only calls that are DISPATCHED spend max_tool_calls. A call to a name the
+// model invented never runs — it is answered "there is no tool named …" — so
+// a round of invented calls next to a real one must apply the real one and
+// let the model hear the correction, not end the run as over budget.
+func TestInventedToolCallsDoNotSpendTheBudget(t *testing.T) {
+	write := &testTool{name: "write", mutating: true}
+	out, err := runWith(t, [][]map[string]any{
+		{multiToolCall(
+			[3]string{"c1", "teleport", `{}`},
+			[3]string{"c2", "teleport", `{}`},
+			[3]string{"c3", "write", `{}`},
+		)},
+		{delta("Hotovo."), completed(StatusCompleted, "", 5)},
+	}, []Tool{write}, Limits{MaxToolCalls: 1}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v — invented calls spent the tool-call budget", err)
+	}
+	if len(write.calls) != 1 || out.Text != "Hotovo." {
+		t.Errorf("write ran %d times, text %q; want the one real call applied and the run finished", len(write.calls), out.Text)
+	}
+}
+
 // A failing tool is INFORMATION: its error goes back to the model as the result
 // and the run continues. Failing the run instead would discard everything the
 // model had got right.

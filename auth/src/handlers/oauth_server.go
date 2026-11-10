@@ -364,7 +364,8 @@ func oauthRequestGone(ctx context.Context) error {
 }
 
 // GetOAuthAuthorization — what the consent page shows the signed-in user.
-func (h *AuthServiceHandler) GetOAuthAuthorization(ctx context.Context, req *pb.GetOAuthAuthorizationReq) (*pb.GetOAuthAuthorizationResp, error) {
+func (h *AuthServiceHandler) GetOAuthAuthorization(ctx context.Context, req *pb.GetOAuthAuthorizationReq) (_ *pb.GetOAuthAuthorizationResp, err error) {
+	defer markReplaySafe(&err)
 	userID, err := h.consentCaller(ctx)
 	if err != nil {
 		return nil, err
@@ -611,7 +612,8 @@ func sameExceptPort(a, b string) bool {
 }
 
 // ListMyOAuthGrants — the caller's connected apps.
-func (h *AuthServiceHandler) ListMyOAuthGrants(ctx context.Context, _ *pb.ListMyOAuthGrantsReq) (*pb.ListMyOAuthGrantsResp, error) {
+func (h *AuthServiceHandler) ListMyOAuthGrants(ctx context.Context, _ *pb.ListMyOAuthGrantsReq) (_ *pb.ListMyOAuthGrantsResp, err error) {
+	defer markReplaySafe(&err)
 	userID, err := h.consentCaller(ctx)
 	if err != nil {
 		return nil, err

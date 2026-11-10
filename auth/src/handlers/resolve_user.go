@@ -49,7 +49,8 @@ var errResolveUserID = errors.New("ResolveUser needs a user id")
 // It trusts its caller with any user, as the domain's own business code is
 // trusted with the domain's data. No preset surfaces it; a project must not
 // either.
-func (h *AuthServiceHandler) ResolveUser(ctx context.Context, req *pb.ResolveUserReq) (*pb.AuthResp, error) {
+func (h *AuthServiceHandler) ResolveUser(ctx context.Context, req *pb.ResolveUserReq) (_ *pb.AuthResp, err error) {
+	defer markReplaySafe(&err)
 	userID := req.GetUserId()
 	if userID == "" {
 		return nil, status.Error(codes.InvalidArgument, errResolveUserID.Error())

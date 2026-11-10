@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/protoadapt"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/lib/i18n"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
@@ -262,6 +263,11 @@ const (
 	CodeSignUpPolicyInvalid     = "SIGNUP_POLICY_INVALID"
 	CodeSignUpKindAmbiguous     = "SIGNUP_KIND_AMBIGUOUS"
 	CodeSignUpHostConflict      = "SIGNUP_HOST_CONFLICT"
+	// CodeSignUpPolicyStale: a registration an open policy admits whose role
+	// is no longer the one the operator setting the policy was checked
+	// against (widened, another role under the name), or whose policy holds
+	// no such check (set before it was stored, or no longer open).
+	CodeSignUpPolicyStale = "SIGNUP_POLICY_STALE"
 	// org_two_factor_policy: the backoffice's policy calls from inside an
 	// organization; a policy value that is none of the three, or a kind the
 	// deployment's memberships do not have.
@@ -518,6 +524,7 @@ const (
 	MsgSignUpPolicyRole            = "Choose the role people get when they register."
 	MsgSignUpKindAmbiguous         = "Registration here is not set up correctly. Contact the organization."
 	MsgSignUpHostConflict          = "This registration names another address than the one it arrived on."
+	MsgSignUpPolicyStale           = "Registration here is paused until the organization confirms its settings again. Contact the organization."
 	MsgTwoFactorPoliciesRealmOnly  = "From inside an organization, change its two-step sign-in in the organization's own settings."
 	MsgTwoFactorPolicyValue        = "Choose required, enrol, optional or disabled."
 	MsgTwoFactorEnrolUnavailable   = "Setting up an authenticator at sign-in is not available here."
@@ -864,4 +871,25 @@ func hashPasswordErr(ctx context.Context, err error, field string) error {
 			CodePasswordTooLong, field, MsgPasswordTooLong, nil)
 	}
 	return err
+}
+
+// markReplaySafe marks the UNAVAILABLE a call that changes nothing answers
+// with (grpcerr.ReplaySafe), so a w17 client sends it again.
+//
+// A w17 server tells its clients not to replay an UNAVAILABLE a handler
+// returned (grpcerr.AnsweredHeader): the handler may have committed a write
+// or called out before the outage it reports, and running it again would do
+// that twice. That holds for a method that writes; one that only reads — a
+// list, a status, Authenticate on every request — did nothing, and a replay
+// is what turns a store's momentary outage into no answer at all for the
+// person. Each such method defers this as its first statement; a method that
+// writes anything, before or after the read that failed, must not (its
+// outage stays answered, and its caller decides).
+//
+// Here, beside the error constructors, because every feature's read-only
+// methods use it and this file is staged with every feature.
+func markReplaySafe(err *error) {
+	if *err != nil && status.Code(*err) == codes.Unavailable && !grpcerr.IsReplaySafe(*err) {
+		*err = grpcerr.ReplaySafe(*err)
+	}
 }

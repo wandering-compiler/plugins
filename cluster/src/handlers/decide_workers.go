@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 )
 
@@ -36,6 +37,25 @@ func (h *ClusterServiceHandler) decide(ctx context.Context, req *pb.DecideWorker
 	var who pb.Caller
 	if err := principal.Envelope(ctx, &who); err != nil || who.GetUserId() == "" {
 		return nil, status.Error(codes.Unauthenticated, "cluster: a ban is recorded under the signed-in operator, and there is none")
+	}
+	// Every id is resolved before anything is written, as DrainRelay does: a
+	// stale selection (a row the operator's list no longer matches, a
+	// mistyped id) made the UPDATE match nothing for that id, and the
+	// operator was told the selection was banned.
+	var unknown []string
+	for _, id := range req.GetIds() {
+		ok, err := h.Workers.Exists(ctx, id)
+		if err != nil {
+			return nil, grpcerr.ReplaySafe(status.Errorf(codes.Unavailable, "cluster: cannot read the worker registry: %v", err))
+		}
+		if !ok {
+			unknown = append(unknown, fmt.Sprintf("%q", id))
+		}
+	}
+	if len(unknown) > 0 {
+		return nil, status.Errorf(codes.NotFound,
+			"cluster: no worker %s is registered — nothing was decided; refresh the list and select again",
+			strings.Join(unknown, ", "))
 	}
 	if err := h.Workers.Decide(ctx, req.GetIds(), ban, who.GetUserId()); err != nil {
 		return nil, err

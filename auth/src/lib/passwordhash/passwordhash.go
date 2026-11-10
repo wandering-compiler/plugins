@@ -169,6 +169,16 @@ func Verify(stored, plain string, currentAlgo Algo, currentParams Params) (ok, n
 	return ok, needsRehash
 }
 
+// Verifiable reports whether stored names an algorithm Verify can run — a
+// PHC string of a supported algorithm. A sentinel such as "!" (a machine
+// account, an erased one), an empty hash or an unknown prefix is not: Verify
+// refuses it at once, without deriving anything. A caller that must not let
+// the response time tell such an account apart runs a throwaway verify
+// instead.
+func Verifiable(stored string) bool {
+	return stored != "" && detectAlgo(stored) != AlgoUnknown
+}
+
 // detectAlgo reads the leading PHC prefix on `stored` and returns
 // the matching Algo. Bcrypt's `$2a$ / $2b$ / $2y$` family is
 // normalised to Bcrypt; argon2id is recognised as a single algo

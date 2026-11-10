@@ -137,7 +137,8 @@ func countTeamRoleHolders(ctx context.Context, h *AuthServiceHandler, roleID str
 
 // ListOrgTeams returns the organization's teams with their members and roles,
 // and whether the caller may manage each.
-func (h *AuthServiceHandler) ListOrgTeams(ctx context.Context, req *pb.ListOrgTeamsReq) (*pb.ListOrgTeamsResp, error) {
+func (h *AuthServiceHandler) ListOrgTeams(ctx context.Context, req *pb.ListOrgTeamsReq) (_ *pb.ListOrgTeamsResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

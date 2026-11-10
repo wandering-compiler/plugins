@@ -540,7 +540,8 @@ func (h *AuthServiceHandler) RotateClientSecret(ctx context.Context, req *pb.Rot
 // ListClients returns every registration, enabled or not, revoked or not —
 // an operator auditing what may receive a code needs to see the disabled and
 // revoked rows too.
-func (h *AuthServiceHandler) ListClients(ctx context.Context, _ *pb.ListClientsReq) (*pb.ListClientsResp, error) {
+func (h *AuthServiceHandler) ListClients(ctx context.Context, _ *pb.ListClientsReq) (_ *pb.ListClientsResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

@@ -33,11 +33,19 @@ func init() {
 // text (ISO 8601): a Brevo date attribute holds the day only.
 const lastActivityAttr = "W17_LAST_ACTIVITY_AT"
 
+// maxAttributeName is the longest attribute name the plugin asks Brevo for.
+const maxAttributeName = 255
+
 // activityAttr is the contact attribute a method's records move:
 // W17_<SERVICE>_<METHOD> (`/e2e.app.tasks.TasksBusiness/CreateTask` →
-// `W17_TASKSBUSINESS_CREATETASK`), upper-cased as Brevo keeps attributes.
+// `W17_TASKSBUSINESS_CREATETASK`), upper-cased as Brevo keeps attributes, and
+// at most 255 characters, prefix included (eventName alone is cut at 255).
 func activityAttr(method string) string {
-	return "W17_" + strings.ToUpper(strings.ReplaceAll(eventName(method), "-", "_"))
+	a := "W17_" + strings.ToUpper(strings.ReplaceAll(eventName(method), "-", "_"))
+	if len(a) > maxAttributeName {
+		a = a[:maxAttributeName] // ASCII: eventName keeps [A-Za-z0-9_-]
+	}
+	return a
 }
 
 // activityAttributes are the attributes the records may move: one per method
@@ -139,7 +147,7 @@ func (t *brevoTool) writeUserActivity(ctx context.Context, user string, attrs ma
 		}
 		// A contact Brevo lacks is created blacklisted, as every contact the
 		// plugin did not subscribe on a consent.
-		if err := t.contactCall("write the activity of", user, t.writeLeavingBlacklisted(ctx, user, "", now)); err != nil {
+		if err := t.contactCall(ctx, "write the activity of", user, t.writeLeavingBlacklisted(ctx, user, "", now)); err != nil {
 			return err
 		}
 		written = now

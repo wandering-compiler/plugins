@@ -160,13 +160,16 @@ type fakeDistTx struct {
 	ended map[string]string // tx id → "commit" | "rollback"
 	// commitErr fails the next Commit (the transaction is gone either way).
 	commitErr error
+	// isolations is the isolation level every Begin asked for, in order.
+	isolations []distxpb.Isolation
 }
 
-func (d *fakeDistTx) Begin(context.Context, *distxpb.BeginRequest, ...grpc.CallOption) (*distxpb.BeginResponse, error) {
+func (d *fakeDistTx) Begin(_ context.Context, in *distxpb.BeginRequest, _ ...grpc.CallOption) (*distxpb.BeginResponse, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.n++
 	d.begun++
+	d.isolations = append(d.isolations, in.GetIsolation())
 	return &distxpb.BeginResponse{TxId: fmt.Sprintf("tx-%d", d.n)}, nil
 }
 

@@ -84,8 +84,8 @@ func (f FinalTextFilters) run(opt *pb.FinalText) (finalTextRun, error) {
 }
 
 // apply cleans text: the built-in filters, then each project filter on the
-// previous one's text. A project filter that fails or does not answer in
-// time is skipped and logged — never the text, which can quote the user —
+// previous one's text. A project filter that fails, does not answer in time,
+// or returns no response is skipped and logged — never the text, which can quote the user —
 // and the answer goes on with the text as it stood: the model's answer was
 // paid for, and a filter being down must not take it away.
 func (r finalTextRun) apply(ctx context.Context, text string, o textOrigin) string {
@@ -102,6 +102,14 @@ func (r finalTextRun) apply(ctx context.Context, text string, o textOrigin) stri
 		cancel()
 		if err != nil {
 			log.Printf("agent: text_filter hook %d of %d skipped (%s): %s", i+1, len(r.hooks), o.method, status.Code(err))
+			continue
+		}
+		// No response and no error is a filter that returned early on a path
+		// it did not mean to take, not an answer: read as "", it replaced the
+		// paid answer with nothing, silently. An explicit empty text is an
+		// answer and stands.
+		if resp == nil {
+			log.Printf("agent: text_filter hook %d of %d skipped (%s): it returned no response and no error", i+1, len(r.hooks), o.method)
 			continue
 		}
 		text = resp.GetText()

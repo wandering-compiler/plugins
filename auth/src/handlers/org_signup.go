@@ -176,6 +176,22 @@ func hostIsBound(ctx context.Context, h *AuthServiceHandler, host string) (bool,
 // registration rather than writing a membership without its grant — and never
 // falls back to another role, which nobody chose for this policy and nobody's
 // ceiling was checked against.
+//
+// The role is granted as it reads NOW, so it is held to the snapshot the live
+// policy stored when its operator was checked against the role ceiling, as an
+// invitation's acceptance is (checkRoleWithinSnapshot): a role widened since,
+// or another role now answering to the name, refuses the registration
+// (SIGNUP_POLICY_STALE) and nothing is written. So does a registration whose
+// kind is no longer open (a confirmation parked while the policy was closed
+// or replaced with another role): the policy that would grant the role is
+// the live one, and it must be the one checked.
+//
+// An open policy with no snapshot — seeded by fixtures, or set before the
+// snapshot was stored — was never held to an operator's ceiling (fixtures
+// are the project's own, and a policy from before kept the meaning it had).
+// Its first registration pins the role as it reads then
+// (PinOrgSignUpPolicySnapshotRow, under the same lock), so a role widened
+// after that refuses the registrations that follow, as for any other policy.
 func writeSignUpJoin(txCtx context.Context, h *AuthServiceHandler, userID string, j *orgJoin) error {
 	// Under the organization's lock, as every grant there is: the role is
 	// resolved and granted with no edit or retirement of it in between.
@@ -184,6 +200,9 @@ func writeSignUpJoin(txCtx context.Context, h *AuthServiceHandler, userID string
 	}
 	roleID, err := h.roleIDByName(txCtx, j.orgID, j.role)
 	if err != nil {
+		return err
+	}
+	if err := checkSignUpPolicyRole(txCtx, h, j, roleID); err != nil {
 		return err
 	}
 	add := &pb.AddOrgMembershipReq{UserId: userID, OrgId: j.orgID, Role: j.role}
@@ -200,6 +219,41 @@ func writeSignUpJoin(txCtx context.Context, h *AuthServiceHandler, userID string
 	}
 	if signupPolicyProductRoles != nil {
 		return signupPolicyProductRoles.grant(txCtx, h, userID, j)
+	}
+	return nil
+}
+
+// checkSignUpPolicyRole holds the role a registration is about to be granted
+// to the snapshot of the live open policy of its kind (see writeSignUpJoin).
+func checkSignUpPolicyRole(txCtx context.Context, h *AuthServiceHandler, j *orgJoin, roleID string) error {
+	policies, err := h.Query.ListOrgSignUpPolicyRows(txCtx, &pb.ListOrgSignUpPolicyRowsReq{OrgId: j.orgID})
+	if err != nil && status.Code(err) != codes.NotFound {
+		return err
+	}
+	snapshot, live := "", false
+	for _, p := range policies.GetPolicies() {
+		if p.GetKind() == j.kind && p.GetOpen() {
+			snapshot, live = p.GetRoleSnapshot(), true
+		}
+	}
+	if live && snapshot == "" {
+		if snapshot, err = h.roleSnapshotNow(txCtx, roleID); err != nil {
+			return err
+		}
+		if _, err := h.Mutation.PinOrgSignUpPolicySnapshotRow(txCtx, &pb.PinOrgSignUpPolicySnapshotRowReq{
+			OrgId: j.orgID, Kind: j.kind, RoleSnapshot: snapshot,
+		}); err != nil && status.Code(err) != codes.NotFound {
+			return err
+		}
+	}
+	within, err := h.roleWithinSnapshot(txCtx, roleID, snapshot)
+	if err != nil {
+		return err
+	}
+	if !within {
+		return refusal(txCtx, codes.FailedPrecondition,
+			"org_signup: the open policy's role is not the one it was pinned to (widened, or another role under the name), or the kind is no longer open — set the policy again",
+			CodeSignUpPolicyStale, "", MsgSignUpPolicyStale, nil)
 	}
 	return nil
 }
@@ -262,8 +316,10 @@ func checkPolicyKind(ctx context.Context, kind string) error {
 // on its host without an invitation, and with which role. The role must be
 // one the organization can hand out (its org-scoped catalogue, never a
 // machine account's) and one the caller may grant (the role ceiling,
-// role_ceiling.go — what they hold covers everything it carries); a closed
-// policy needs none. Replacing a policy ends the previous row.
+// role_ceiling.go — what they hold covers everything it carries), and the
+// role as it was then is stored with the policy for the registration to be
+// held to; a closed policy needs none. Replacing a policy ends the previous
+// row.
 func (h *AuthServiceHandler) SetOrgSignUpPolicy(ctx context.Context, req *pb.SetOrgSignUpPolicyReq) (*pb.SetOrgSignUpPolicyResp, error) {
 	caller, err := callerUserID(ctx)
 	if err != nil {
@@ -276,6 +332,7 @@ func (h *AuthServiceHandler) SetOrgSignUpPolicy(ctx context.Context, req *pb.Set
 		return nil, err
 	}
 	role := strings.TrimSpace(req.GetRole())
+	snapshot := ""
 	if req.GetOpen() {
 		if role == "" {
 			return nil, refusal(ctx, codes.InvalidArgument, "org_signup: an open policy needs the role a registration gets",
@@ -288,7 +345,9 @@ func (h *AuthServiceHandler) SetOrgSignUpPolicy(ctx context.Context, req *pb.Set
 		// The registration grants this role later with no ceiling of its own
 		// (the registrant holds nothing), so the policy is where the grant is
 		// authorised: held to the setter's ceiling, as an invitation is.
-		if _, err := h.checkMayGrantRole(ctx, roleID); err != nil {
+		// The snapshot — the role as the setter was allowed to hand it out —
+		// is stored, and the registration holds the role to it.
+		if snapshot, err = h.checkMayGrantRole(ctx, roleID); err != nil {
 			return nil, err
 		}
 	} else {
@@ -308,6 +367,7 @@ func (h *AuthServiceHandler) SetOrgSignUpPolicy(ctx context.Context, req *pb.Set
 		}
 		row := &pb.SetOrgSignUpPolicyRowReq{
 			OrgId: req.GetOrgId(), Kind: req.GetKind(), Open: req.GetOpen(), Role: role, SetBy: caller,
+			RoleSnapshot: snapshot,
 		}
 		if writeProductRoles != nil {
 			writeProductRoles(row)
@@ -339,7 +399,8 @@ func (h *AuthServiceHandler) ClearOrgSignUpPolicy(ctx context.Context, req *pb.C
 }
 
 // ListOrgSignUpPolicies is an organization's live policies, by kind.
-func (h *AuthServiceHandler) ListOrgSignUpPolicies(ctx context.Context, req *pb.ListOrgSignUpPoliciesReq) (*pb.ListOrgSignUpPoliciesResp, error) {
+func (h *AuthServiceHandler) ListOrgSignUpPolicies(ctx context.Context, req *pb.ListOrgSignUpPoliciesReq) (_ *pb.ListOrgSignUpPoliciesResp, err error) {
+	defer markReplaySafe(&err)
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -21,6 +24,7 @@ type tokenFlowMock struct {
 	// query state
 	userByEmail map[string]*pb.User // email -> user (nil = not found)
 	userByID    map[string]*pb.User
+	lookupErr   error // GetUserByEmail fails with it
 
 	// recorded
 	createdReset      *pb.CreatePasswordResetTokenReq
@@ -44,6 +48,9 @@ type tokenFlowMock struct {
 }
 
 func (m *tokenFlowMock) GetUserByEmail(ctx context.Context, in *pb.GetUserByEmailReq, _ ...grpc.CallOption) (*pb.GetUserByEmailResp, error) {
+	if m.lookupErr != nil {
+		return nil, m.lookupErr
+	}
 	return &pb.GetUserByEmailResp{User: m.userByEmail[in.GetEmail()]}, nil
 }
 func (m *tokenFlowMock) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
@@ -198,6 +205,48 @@ func TestRequestPasswordReset_AFailedMintAnswersLikeAnUnknownAddress(t *testing.
 	}
 	if known.createdReset == nil {
 		t.Error("the failing mint never ran — this arm is not exercising the error")
+	}
+}
+
+// The answer says nothing, but the operator must hear of a failure: a mint
+// that fails (store down, sealing error, bus down) and a lookup that fails
+// with anything but NotFound are logged at ERROR — otherwise every request
+// answers success, no link is ever sent and nothing reports it. An unknown
+// address logs nothing, and no line carries the address.
+func TestRequestPasswordReset_AFailureIsLoggedNotAnswered(t *testing.T) {
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	for name, m := range map[string]*tokenFlowMock{
+		"mint fails":   {userByEmail: map[string]*pb.User{"u@x.com": {Id: "u1", Email: "u@x.com"}}, createResetErr: status.Error(codes.Unavailable, "insert failed")},
+		"lookup fails": {lookupErr: status.Error(codes.Unavailable, "store down")},
+	} {
+		logged.Reset()
+		if _, err := newTokenFlowHandler(m).RequestPasswordReset(context.Background(), &pb.RequestPasswordResetReq{Email: "u@x.com"}); err != nil {
+			t.Fatalf("%s: %v, want the constant success", name, err)
+		}
+		line := logged.String()
+		if !strings.Contains(line, "level=ERROR") || !strings.Contains(line, "password reset") {
+			t.Errorf("%s: no ERROR line for the failure: %q", name, line)
+		}
+		if strings.Contains(line, "u@x.com") {
+			t.Errorf("%s: the log line carries the address: %q", name, line)
+		}
+	}
+
+	logged.Reset()
+	for _, m := range []*tokenFlowMock{
+		{userByEmail: map[string]*pb.User{}},
+		{lookupErr: status.Error(codes.NotFound, "no rows")},
+	} {
+		if _, err := newTokenFlowHandler(m).RequestPasswordReset(context.Background(), &pb.RequestPasswordResetReq{Email: "ghost@x.com"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if logged.Len() != 0 {
+		t.Errorf("an unknown address was logged: %q", logged.String())
 	}
 }
 
