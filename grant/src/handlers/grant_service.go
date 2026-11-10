@@ -160,7 +160,7 @@ func (h *GrantServiceHandler) ApproveEnvelope(ctx context.Context, req *pb.Appro
 	if err != nil {
 		return nil, err
 	}
-	return &pb.EnvelopeVersion{Id: resp.GetId(), OrgId: resp.GetOrgId(), Status: StatusApproved}, nil
+	return decidedVersion(resp), nil
 }
 
 // RejectEnvelope refuses a proposal, with a note for the organization.
@@ -173,7 +173,23 @@ func (h *GrantServiceHandler) RejectEnvelope(ctx context.Context, req *pb.Reject
 	if err != nil {
 		return nil, err
 	}
-	return &pb.EnvelopeVersion{Id: resp.GetId(), Status: StatusRejected, DecisionNote: req.GetNote()}, nil
+	return decidedVersion(resp), nil
+}
+
+// decidedVersion is the version a decision wrote, as its RETURNING read it:
+// the whole of it, so the backoffice shows what it decided without listing
+// again.
+func decidedVersion(d *pb.DecidedEnvelope) *pb.EnvelopeVersion {
+	return &pb.EnvelopeVersion{
+		Id: d.GetId(), OrgId: d.GetOrgId(), Status: d.GetStatus(),
+		Fields: &pb.EnvelopeFields{
+			DisplayName: d.GetDisplayName(), LogoLightUrl: d.GetLogoLightUrl(), LogoDarkUrl: d.GetLogoDarkUrl(),
+			VerifiedHost: d.GetVerifiedHost(), WebsiteUrl: d.GetWebsiteUrl(), SupportUrl: d.GetSupportUrl(),
+			PrivacyUrl: d.GetPrivacyUrl(), TermsUrl: d.GetTermsUrl(), AccentColor: d.GetAccentColor(),
+			DefaultLanguage: d.GetDefaultLanguage(), OperatedBy: d.GetOperatedBy(),
+		},
+		ProposedAt: d.GetProposedAt(), DecidedAt: d.GetDecidedAt(), DecisionNote: d.GetDecisionNote(),
+	}
 }
 
 // GetOrgEnvelope is an organization's APPROVED envelope; found = false when

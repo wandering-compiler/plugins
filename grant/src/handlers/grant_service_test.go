@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
@@ -26,11 +27,11 @@ type store struct {
 
 func (s *store) InsertEnvelope(_ context.Context, in *pb.InsertEnvelopeReq, _ ...grpc.CallOption) (*pb.InsertEnvelopeResp, error) {
 	id := "env-" + string(rune('a'+len(s.envelopes)))
-	s.envelopes = append(s.envelopes, &pb.EnvelopeRow{Id: id, OrgId: in.GetOrgId(), Status: StatusProposed, DisplayName: in.GetDisplayName()})
+	s.envelopes = append(s.envelopes, &pb.EnvelopeRow{Id: id, OrgId: in.GetOrgId(), Status: StatusProposed, DisplayName: in.GetDisplayName(), WebsiteUrl: in.GetWebsiteUrl(), ProposedAt: timestamppb.Now()})
 	return &pb.InsertEnvelopeResp{Id: id}, nil
 }
 
-func (s *store) ApproveEnvelopeRow(_ context.Context, in *pb.ApproveEnvelopeRowReq, _ ...grpc.CallOption) (*pb.ApproveEnvelopeRowResp, error) {
+func (s *store) ApproveEnvelopeRow(_ context.Context, in *pb.ApproveEnvelopeRowReq, _ ...grpc.CallOption) (*pb.DecidedEnvelope, error) {
 	var target *pb.EnvelopeRow
 	for _, e := range s.envelopes {
 		if e.GetId() == in.GetId() && e.GetStatus() == StatusProposed {
@@ -46,7 +47,26 @@ func (s *store) ApproveEnvelopeRow(_ context.Context, in *pb.ApproveEnvelopeRowR
 		}
 	}
 	target.Status = StatusApproved
-	return &pb.ApproveEnvelopeRowResp{Id: target.GetId(), OrgId: target.GetOrgId()}, nil
+	target.DecidedAt = timestamppb.Now()
+	return decided(target), nil
+}
+
+func (s *store) RejectEnvelopeRow(_ context.Context, in *pb.RejectEnvelopeRowReq, _ ...grpc.CallOption) (*pb.DecidedEnvelope, error) {
+	for _, e := range s.envelopes {
+		if e.GetId() == in.GetId() && e.GetStatus() == StatusProposed {
+			e.Status, e.DecisionNote, e.DecidedAt = StatusRejected, in.GetDecisionNote(), timestamppb.Now()
+			return decided(e), nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "not pending")
+}
+
+// decided is the row as the decision's RETURNING reads it.
+func decided(e *pb.EnvelopeRow) *pb.DecidedEnvelope {
+	return &pb.DecidedEnvelope{
+		Id: e.GetId(), OrgId: e.GetOrgId(), Status: e.GetStatus(), DisplayName: e.GetDisplayName(),
+		WebsiteUrl: e.GetWebsiteUrl(), ProposedAt: e.GetProposedAt(), DecidedAt: e.GetDecidedAt(), DecisionNote: e.GetDecisionNote(),
+	}
 }
 
 func (s *store) GetApprovedEnvelope(_ context.Context, in *pb.GetApprovedEnvelopeReq, _ ...grpc.CallOption) (*pb.EnvelopeRow, error) {
@@ -149,7 +169,7 @@ type raceMutation struct {
 	err error
 }
 
-func (m raceMutation) ApproveEnvelopeRow(context.Context, *pb.ApproveEnvelopeRowReq, ...grpc.CallOption) (*pb.ApproveEnvelopeRowResp, error) {
+func (m raceMutation) ApproveEnvelopeRow(context.Context, *pb.ApproveEnvelopeRowReq, ...grpc.CallOption) (*pb.DecidedEnvelope, error) {
 	return nil, m.err
 }
 
@@ -231,5 +251,41 @@ func TestEnvelopeDecisions_TheBackofficeFromInsideAnOrganization(t *testing.T) {
 	}
 	if _, err := h.ApproveEnvelope(backoffice("org-ops"), &pb.ApproveEnvelopeReq{Id: v1.GetId()}); err != nil {
 		t.Errorf("the backoffice approving from inside its own organization: %v", err)
+	}
+}
+
+// A decision is answered with what was decided: the version's organization,
+// its fields and when it was proposed and decided — a backoffice page shows
+// "approved: <name> of <org>" from the answer, without listing again.
+func TestEnvelopeDecisions_AnswerWhatWasDecided(t *testing.T) {
+	s := &store{}
+	h := &GrantServiceHandler{Query: s, Mutation: s, Lock: &acllock.Lock{Permissions: map[string]int{
+		"GRANT_GRANT_SERVICE_APPROVE_ENVELOPE": 1, "GRANT_GRANT_SERVICE_REJECT_ENVELOPE": 2}}}
+	fields := &pb.EnvelopeFields{DisplayName: "Acme", WebsiteUrl: "https://acme.example"}
+	v1, err := h.ProposeEnvelope(as("admin", "org-acme"), &pb.ProposeEnvelopeReq{Fields: fields})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.ApproveEnvelope(as("ops", ""), &pb.ApproveEnvelopeReq{Id: v1.GetId()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetId() != v1.GetId() || got.GetOrgId() != "org-acme" || got.GetStatus() != StatusApproved ||
+		got.GetFields().GetDisplayName() != "Acme" || got.GetFields().GetWebsiteUrl() != "https://acme.example" ||
+		got.GetProposedAt() == nil || got.GetDecidedAt() == nil {
+		t.Errorf("approve answered %+v, want the whole approved version", got)
+	}
+	v2, err := h.ProposeEnvelope(as("admin", "org-acme"), &pb.ProposeEnvelopeReq{Fields: &pb.EnvelopeFields{DisplayName: "Acme 2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = h.RejectEnvelope(as("ops", ""), &pb.RejectEnvelopeReq{Id: v2.GetId(), Note: "logo missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetId() != v2.GetId() || got.GetOrgId() != "org-acme" || got.GetStatus() != StatusRejected ||
+		got.GetFields().GetDisplayName() != "Acme 2" || got.GetDecisionNote() != "logo missing" ||
+		got.GetProposedAt() == nil || got.GetDecidedAt() == nil {
+		t.Errorf("reject answered %+v, want the whole rejected version", got)
 	}
 }
