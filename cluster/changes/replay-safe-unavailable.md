@@ -1,3 +1,0 @@
-### Answers given before anything was done may be retried by w17 clients
-
-The control plane's `UNAVAILABLE` answers that come before it has called a relay or written anything — the ban set or the relay registry could not be read, the worker registry could not be read while a ban decision checked its ids, no enabled relay is registered — are now marked replay-safe, so a w17 client sends the call again as it does for a transport failure. Every other `UNAVAILABLE` (an unreachable relay, `NO_RELAY` after relays were tried, a sweep that already recorded workers) is still returned to the caller. Needs the SDK release that carries `grpcerr.ReplaySafe`.

@@ -1,5 +1,62 @@
 # cluster — changelog
 
+## 0.1.0-rc.20
+
+### The relay and the control plane log a ban set's first delivery
+
+A relay now logs the first ban set it receives after start (`workeradmit: received the first ban set since start (version N, M banned)`), and every change after it; the unchanged set every management call carries stays silent. Until then the startup line `no saved ban set: workers are refused…` was the last word in the log and read as the current state long after a set arrived. A relay that restarted with a saved set logs when a control plane first confirms it.
+
+The control plane logs its first successful delivery to each relay (`cluster: relay "edge" took the ban set (the first delivery to it from this control plane)`). It logged only failures and recoveries, so "delivery works" and "delivery never ran" read the same.
+
+### Banning or unbanning an unknown worker id is refused
+
+`BanWorkers` and `UnbanWorkers` now resolve every selected id before writing. A selection holding an id the registry does not hold (a stale list, a mistyped id in an API call) is refused `NOT_FOUND`, naming the id, and nothing is decided. Until now the update matched no row for that id and the call answered success, so the admin reported a ban that never happened.
+
+### A relay enrols no worker until it holds the ban set
+
+`Enroll` now refuses with `BAN_SET_UNKNOWN` (`UNAVAILABLE`) while the relay holds no ban set — after a restart without a saved set, before a control plane has called it — as attach, tunnels and renewal already did. Until then a banned key holding a valid registration code was issued a fresh 30-day certificate in that window. The refusal does not spend the code, and a worker retries it with the same code at its usual pace instead of stopping.
+
+### Concurrent ban decisions on lagging replicas no longer share a version
+
+A control-plane replica whose clock is behind the newest ban decision moved its own decision exactly 1 ms past it, so two such replicas deciding at once recorded the same ban-set version, and a relay could apply the set one of them read between the two commits — lifting the other's ban until the next set arrived (seconds, at most the 5-minute delivery). The step now carries a random microsecond part, which makes the collision rare; the residual case is stated as a gap in the SPEC.
+
+### Organization, not tenant
+
+- The documentation, comments and tests say organization where they said tenant. No
+  behaviour changes.
+
+### The relay's identity and CA are written whole or not at all
+
+The relay key and certificate and the CA key and certificate were written with plain file writes, so a disk filling up during the first start could leave a truncated key; the next start then refused the half-written pair, and the operator following the message lost the identity. Each file is now written to a temp file, synced and renamed into place, key first, so a failed write leaves nothing and the next start mints a fresh pair. The worker's own key and certificate already were.
+
+### The relay no longer forwards gateway-owned metadata to workers (read first)
+
+Behaviour change. The relay's callers port now removes every metadata key only a
+gateway may write — `x-w17-*` (the identity envelope and scopes), `w17-label-*`,
+`w17-tx-id`, `w17-conn-id` and their grpc-gateway spellings — before a call reaches
+the worker, as it already removed the ticket. A ticket holder could send them and
+the worker received them as if a gateway had stamped them. Every other header still
+travels. A worker that read a principal from those keys gets none now; the caller's
+remaining metadata is the caller's word, never a verified identity.
+
+### Answers given before anything was done may be retried by w17 clients
+
+The control plane's `UNAVAILABLE` answers that come before it has called a relay or written anything — the ban set or the relay registry could not be read, the worker registry could not be read while a ban decision checked its ids, no enabled relay is registered — are now marked replay-safe, so a w17 client sends the call again as it does for a transport failure. Every other `UNAVAILABLE` (an unreachable relay, `NO_RELAY` after relays were tried, a sweep that already recorded workers) is still returned to the caller. Needs the SDK release that carries `grpcerr.ReplaySafe`.
+
+### A reservation can name the engine its work needs
+
+`ReserveTaskReq.engine` names what the work needs the worker to run, an opaque string the pool's user defines. For a codegen pool it is the codegen engine's version. The pool compares the strings and interprets nothing.
+
+- **Ticket.** A ticket carries its reservation's engine. The proxy refuses a call whose `w17-cluster-engine` header names another engine, with `ENGINE_MISMATCH`, and the ticket stays unspent. A call naming no engine is let through, so a client from before engines keeps working. The caller's header never reaches the worker: the relay drops it and forwards the reservation's engine under the same key, or none for a reservation that bound none. The worker routes on the relay's word, so a caller cannot pick an engine the control plane did not bind. `tunnel.Backend.Set` carries the keys a picker vouches for.
+- **Workers.** A worker announces the engines it runs in `AttachReq.engines` (`workerconn.Config.Engines`). The proxy hands a ticket only to a worker that runs its engine. A worker naming none takes any work, as before.
+- **Relay.** A relay refuses a reservation for an engine no attached worker runs, with `ENGINE_NOT_CARRIED`. The control plane falls through to the next relay. A relay with nobody attached still queues the reservation, as it queues any.
+
+An empty engine binds nothing, so a control plane and workers from before the field behave as they always did. Capacity is still the sum over the fleet; per-engine queues are not part of this.
+
+### A panic on a relay or worker server no longer ends the process
+
+The relay's management, worker-attach and proxy servers and the worker's server on its tunnel are built by hand, and carried no panic recovery: grpc-go lets a handler's panic end the process, so one bad request took a relay down with every queue, ticket, reservation, attached worker and running call on it. Each server now answers such a panic `INTERNAL` (the method name only), logs it with its stack, and keeps serving. A project passing its own options to `workerconn.ServeTunnel` keeps them; the recovery runs outside them.
+
 ## 0.1.0-rc.19
 
 ### The relay reads return their whole row
