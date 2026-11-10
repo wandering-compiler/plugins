@@ -238,6 +238,36 @@ func TestBanWorkers_DeliversTheSetToEveryRelayAtOnce(t *testing.T) {
 	}
 }
 
+// Lifting the LAST ban sends an empty set, and an empty set is an answer, not
+// an absence: the empty w17-cluster-banned value must survive a real gRPC hop
+// (HTTP/2 framing, the relay's ban interceptor) and replace the set the relay
+// holds. Were it dropped on the way, the relay would read "no set sent", keep
+// {bb} and refuse the unbanned worker for good.
+func TestUnbanWorkers_TheEmptySetReachesTheRelay(t *testing.T) {
+	reg, dial := serveRelayWithWorkers(t, workeradmit.Worker{ID: "bb"})
+	ws := &workerStore{banned: []string{"bb"}, banVersion: 1}
+	h := &ClusterServiceHandler{
+		Relays:  &store{relays: []Relay{{ID: "1", Name: "edge", URL: "live"}}},
+		Workers: ws,
+		Dial:    dial,
+	}
+	if _, err := h.BanWorkers(signedIn("op-1"), &pb.DecideWorkersActionReq{Ids: []string{"w-bb"}}); err != nil {
+		t.Fatalf("BanWorkers: %v", err)
+	}
+	if reg.Admitted("bb") {
+		t.Fatal("the relay did not get the ban")
+	}
+	ws.mu.Lock()
+	ws.banned, ws.banVersion = nil, 2
+	ws.mu.Unlock()
+	if _, err := h.UnbanWorkers(signedIn("op-1"), &pb.DecideWorkersActionReq{Ids: []string{"w-bb"}}); err != nil {
+		t.Fatalf("UnbanWorkers: %v", err)
+	}
+	if !reg.Admitted("bb") {
+		t.Error("the relay still bans bb after the last ban was lifted — the empty set did not arrive")
+	}
+}
+
 // Every registered relay, enabled or not, is handed the ban set again on a
 // schedule — the path that reaches a relay unreachable when the decision was
 // taken, or restarted without a saved set — with no decision and no
