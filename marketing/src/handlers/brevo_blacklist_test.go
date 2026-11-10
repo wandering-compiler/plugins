@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -623,5 +626,68 @@ func TestReconcile_SignUpsDuringThePassDoNotStopIt(t *testing.T) {
 	done, err := tool(t, f, &ledger{}, "all", "", "").reconcileBlacklist(context.Background(), "replica-1")
 	if err != nil || !done {
 		t.Fatalf("done %v, err %v — growth kept the pass from finishing", done, err)
+	}
+}
+
+// brevo/brevo-side-unsubscribe-stands: a contact Brevo created from an event
+// (blacklisted, no address) for a user the plugin had not written — an
+// account older than the activation, or one whose UserCreated came late — is
+// not a person's unsubscribe: the user's first yes subscribes it.
+func TestConsent_AContactAnEventCreatedIsNotAPersonsUnsubscribe(t *testing.T) {
+	f, l := &fakeBrevo{}, &ledger{sent: map[string]bool{}}
+	tl := tool(t, f, l, "all", "", "")
+	ctx := context.Background()
+	if err := tl.ConsumeMarketing(ctx, batch(record(1, createTask, "u1"))); err != nil {
+		t.Fatal(err)
+	}
+	if !f.known["u1"] || !f.blacklisted["u1"] {
+		t.Fatalf("precondition: the event did not create the contact blacklisted (known %v, blacklisted %v)", f.known["u1"], f.blacklisted["u1"])
+	}
+	if err := tl.onConsentChanged(ctx, consentEvent("u1", true, day1)); err != nil {
+		t.Fatal(err)
+	}
+	if f.blacklisted["u1"] {
+		t.Errorf("the user said yes and stays blacklisted; updates=%v", f.updates)
+	}
+	if c := l.contacts["u1"]; c.GetUnsubscribedAt() != nil {
+		t.Errorf("a Brevo-side unsubscribe was recorded for a contact the person never saw: %+v", c)
+	}
+
+	// The rule it relies on still holds: a contact the plugin subscribed and
+	// Brevo then blacklists is the person's unsubscribe.
+	f.blacklisted["u1"] = true                                                       // the person unsubscribed in Brevo
+	if err := tl.onConsentChanged(ctx, consentEvent("u1", true, day1)); err != nil { // a replay
+		t.Fatal(err)
+	}
+	if !f.blacklisted["u1"] || l.contacts["u1"].GetUnsubscribedAt() == nil {
+		t.Errorf("a person's unsubscribe in Brevo was undone by a replayed yes: blacklisted %v, row %+v", f.blacklisted["u1"], l.contacts["u1"])
+	}
+}
+
+// The statements the ledger models: a row EnsureContact or SetContactEmail
+// inserts starts sent_blacklisted, and their update of an existing row
+// leaves it alone.
+func TestContactStatements_ANewRowStartsBlacklisted(t *testing.T) {
+	src, err := os.ReadFile("../../proto/mutations/marketing_mutation.proto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rpc := range []string{"EnsureContact", "SetContactEmail"} {
+		start := bytes.Index(src, []byte("rpc "+rpc+"("))
+		if start < 0 {
+			t.Fatalf("%s not found", rpc)
+		}
+		end := bytes.Index(src[start:], []byte("};"))
+		var dql strings.Builder
+		for _, p := range regexp.MustCompile(`"([^"]*)"`).FindAllStringSubmatch(string(src[start:start+end]), -1) {
+			dql.WriteString(p[1])
+		}
+		insert, update, _ := strings.Cut(dql.String(), "ON CONFLICT")
+		if !strings.Contains(insert, "sent_blacklisted = TRUE") {
+			t.Errorf("%s: a new row does not start sent_blacklisted: %s", rpc, dql.String())
+		}
+		if strings.Contains(update, "sent_blacklisted") {
+			t.Errorf("%s: the update of an existing row touches sent_blacklisted: %s", rpc, dql.String())
+		}
 	}
 }

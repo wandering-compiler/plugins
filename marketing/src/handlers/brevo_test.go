@@ -50,6 +50,10 @@ type fakeBrevo struct {
 	// UpsertContact, before it writes.
 	onCreate func()
 	onUpsert func()
+	// onSend / onUpdate run once, inside the next SendEvents / UpdateContact,
+	// before it writes: another delivery (an erasure) landing in between.
+	onSend   func()
+	onUpdate func()
 }
 
 func (f *fakeBrevo) keep(ext string, blacklisted *bool) {
@@ -97,11 +101,28 @@ func bl(b *bool) string {
 	return fmt.Sprintf("bl=%v", *b)
 }
 
+// SendEvents records the batch and, as measured against an account, creates
+// the contact of an ext_id Brevo does not know: no address, blacklisted.
 func (f *fakeBrevo) SendEvents(_ context.Context, events []brevo.Event) (brevo.BatchResult, error) {
+	if g := f.onSend; g != nil {
+		f.onSend = nil
+		g()
+	}
 	if f.sendErr != nil {
 		return brevo.BatchResult{}, f.sendErr
 	}
 	f.batches = append(f.batches, append([]brevo.Event(nil), events...))
+	for i, ev := range events {
+		if _, refused := f.failed[i]; refused || ev.Identifiers.ExtID == "" || f.known[ev.Identifiers.ExtID] {
+			continue
+		}
+		if f.known == nil {
+			f.known = map[string]bool{}
+		}
+		f.known[ev.Identifiers.ExtID] = true
+		yes := true
+		f.keep(ev.Identifiers.ExtID, &yes)
+	}
 	return brevo.BatchResult{Failed: f.failed}, nil
 }
 
@@ -125,6 +146,10 @@ func (f *fakeBrevo) UpsertContact(_ context.Context, ext, email string, attrs ma
 }
 
 func (f *fakeBrevo) UpdateContact(_ context.Context, ext string, attrs map[string]any, blacklisted *bool) error {
+	if g := f.onUpdate; g != nil {
+		f.onUpdate = nil
+		g()
+	}
 	if f.callErr != nil {
 		return f.callErr
 	}
@@ -155,6 +180,10 @@ func (f *fakeBrevo) ensuredSoFar() []string {
 
 func (f *fakeBrevo) DeleteContact(_ context.Context, ext string) error {
 	f.deletes = append(f.deletes, ext)
+	if f.callErr == nil {
+		delete(f.known, ext)
+		delete(f.blacklisted, ext)
+	}
 	return f.callErr
 }
 
@@ -313,11 +342,22 @@ func (l *ledger) ListContactsByEmail(_ context.Context, in *pb.ListContactsByEma
 	return out, nil
 }
 
+// newContact is the row EnsureContact and SetContactEmail insert: it starts
+// sent_blacklisted, as their statements write it.
+func (l *ledger) newContact(user string) *pb.ContactRow {
+	if c := l.contacts[user]; c != nil {
+		return c
+	}
+	c := l.contact(user)
+	c.SentBlacklisted = true
+	return c
+}
+
 func (l *ledger) SetContactEmail(_ context.Context, in *pb.SetContactEmailReq, _ ...grpc.CallOption) (*pb.ContactWriteResp, error) {
 	if l.writeErr != nil {
 		return nil, l.writeErr
 	}
-	l.contact(in.GetUserId()).Email = in.GetEmail()
+	l.newContact(in.GetUserId()).Email = in.GetEmail()
 	return &pb.ContactWriteResp{}, nil
 }
 
@@ -325,7 +365,7 @@ func (l *ledger) EnsureContact(_ context.Context, in *pb.EnsureContactReq, _ ...
 	if l.writeErr != nil {
 		return nil, l.writeErr
 	}
-	l.contact(in.GetUserId())
+	l.newContact(in.GetUserId())
 	return &pb.ContactWriteResp{}, nil
 }
 
@@ -575,8 +615,9 @@ func TestNewSelection_RefusesWhatTheStreamDoesNotRecord(t *testing.T) {
 }
 
 // The event: the method as its name, the user as the contact, the record's
-// own properties with the org and the account type it acted in, the consent
-// on the contact. Nothing else.
+// own properties with the org and the account type it acted in. Nothing on
+// the contact: not the org (the request's, not the person's), and not the
+// consent (the request's snapshot; the attribute comes from the Contact row).
 func TestEventFor(t *testing.T) {
 	consent := true
 	meta := &w17pb.RequestEventMeta{
@@ -586,7 +627,7 @@ func TestEventFor(t *testing.T) {
 		Start:  timestamppb.New(time.Date(2026, 10, 19, 9, 0, 0, 0, time.UTC)),
 		Client: &w17pb.RequestClient{Ip: "10.0.0.1", UserAgent: "ua", Referrer: "https://x.example", Utm: map[string]string{"source": "news", "camp aign": "q4"}},
 	}
-	ev, ok := eventFor(meta, "W17_MARKETING_CONSENT")
+	ev, ok := eventFor(meta)
 	if !ok {
 		t.Fatal("not sent")
 	}
@@ -606,22 +647,17 @@ func TestEventFor(t *testing.T) {
 			t.Errorf("the IP or user agent reached Brevo: %v", ev)
 		}
 	}
-	if fmt.Sprint(ev.ContactProperties) != fmt.Sprint(map[string]any{"W17_MARKETING_CONSENT": true}) {
-		t.Errorf("contact = %v, want the consent alone: the org is the request's, not the person's", ev.ContactProperties)
+	if len(ev.ContactProperties) != 0 {
+		t.Errorf("contact = %v, want nothing written to the contact", ev.ContactProperties)
 	}
 	// A project without organizations or kinds: neither property, not empty
 	// ones.
 	bare := proto.Clone(meta).(*w17pb.RequestEventMeta)
 	bare.OrgId, bare.MembershipKind = "", ""
-	if ev, _ := eventFor(bare, "W17_MARKETING_CONSENT"); ev.EventProperties["w17_org_id"] != nil || ev.EventProperties["w17_account_type"] != nil {
+	if ev, _ := eventFor(bare); ev.EventProperties["w17_org_id"] != nil || ev.EventProperties["w17_account_type"] != nil {
 		t.Errorf("no org, no kind: properties = %v", ev.EventProperties)
 	}
-	meta.MarketingConsent = nil
-	ev, _ = eventFor(meta, "W17_MARKETING_CONSENT")
-	if _, ok := ev.ContactProperties["W17_MARKETING_CONSENT"]; ok {
-		t.Error("an unknown consent was written as false")
-	}
-	if _, ok := eventFor(&w17pb.RequestEventMeta{Method: createTask}, "X"); ok {
+	if _, ok := eventFor(&w17pb.RequestEventMeta{Method: createTask}); ok {
 		t.Error("a record of nobody became an event")
 	}
 }
@@ -749,5 +785,29 @@ func TestIsUniqueViolation(t *testing.T) {
 	}
 	if isUniqueViolation(status.Error(codes.InvalidArgument, "bad")) || isUniqueViolation(errors.New("x")) {
 		t.Error("another error read as a duplicate")
+	}
+}
+
+// brevo/consent-from-the-row: an event writes nothing to the contact — the
+// consent attribute in particular comes only from the Contact row, dated —
+// so a record made before a withdrawal and delivered after it cannot move the
+// attribute back.
+func TestEventFor_WritesNothingToTheContact(t *testing.T) {
+	f, l := &fakeBrevo{known: map[string]bool{"u1": true}}, &ledger{sent: map[string]bool{}}
+	tl := tool(t, f, l, "all", "", "")
+	ctx := context.Background()
+	if err := tl.onConsentChanged(ctx, consentEvent("u1", false, day2)); err != nil {
+		t.Fatal(err)
+	}
+	r := record(1, createTask, "u1")
+	r.Meta.MarketingConsent = proto.Bool(true) // authenticated before the withdrawal
+	if err := tl.ConsumeMarketing(ctx, batch(r)); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.batches) != 1 || len(f.batches[0]) != 1 {
+		t.Fatalf("batches = %+v", f.batches)
+	}
+	if cp := f.batches[0][0].ContactProperties; len(cp) != 0 {
+		t.Errorf("the event writes to the contact: %v (the kept decision is a no: %+v)", cp, l.contacts["u1"])
 	}
 }

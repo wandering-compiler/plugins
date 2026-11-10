@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,10 +27,36 @@ import (
 // and the stream redelivers the batch; what was sent before it is skipped
 // then. An event Brevo refuses for its content is logged and not retried:
 // sending it again would be refused again.
+//
+// A record of a user the plugin holds erased writes nothing (brevo/erasure):
+// an event alone would create the contact again, keyed by the user's id. The
+// records arrive late (a backlog, a redelivery, a dead-letter replay) while
+// UserDeleted is handled at once, so the rows are read once per batch, and
+// again after the batch is written, for an erasure that landed meanwhile.
 func (t *brevoTool) ConsumeMarketing(ctx context.Context, batch *eventlog.ConsumedBatch) error {
-	var selected []*w17pb.RequestEventMeta
+	var candidates []*w17pb.RequestEventMeta
+	seen := map[string]bool{}
+	var users []string
 	for _, rec := range batch.Records {
 		if meta := rec.Meta; meta != nil && meta.GetUserId() != "" && t.sel.sends(meta.GetMethod()) {
+			candidates = append(candidates, meta)
+			if u := meta.GetUserId(); !seen[u] {
+				seen[u] = true
+				users = append(users, u)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	sort.Strings(users)
+	erased, err := t.erasedOf(ctx, users)
+	if err != nil {
+		return err
+	}
+	var selected []*w17pb.RequestEventMeta
+	for _, meta := range candidates {
+		if !erased[meta.GetUserId()] {
 			selected = append(selected, meta)
 		}
 	}
@@ -44,10 +71,18 @@ func (t *brevoTool) ConsumeMarketing(ctx context.Context, batch *eventlog.Consum
 			return err
 		}
 	}
-	if !t.events {
-		return nil
+	if t.events {
+		if err := t.sendEvents(ctx, selected); err != nil {
+			return err
+		}
 	}
-	return t.sendEvents(ctx, selected)
+	var written []string
+	for _, u := range users {
+		if !erased[u] {
+			written = append(written, u)
+		}
+	}
+	return t.undoForErased(ctx, written...)
 }
 
 // sendEvents sends the selected records as Brevo events (brevo_events).
@@ -59,7 +94,7 @@ func (t *brevoTool) sendEvents(ctx context.Context, selected []*w17pb.RequestEve
 	var todo []pending
 	var ids []string
 	for _, meta := range selected {
-		ev, ok := eventFor(meta, t.consentAttr)
+		ev, ok := eventFor(meta)
 		if !ok {
 			continue
 		}
@@ -151,7 +186,7 @@ func eventName(method string) string {
 // eventFor is the Brevo event a record becomes, keyed by the user's id;
 // false for a record of nobody (marketing records are signed-in only, so
 // this is defensive).
-func eventFor(meta *w17pb.RequestEventMeta, consentAttr string) (brevo.Event, bool) {
+func eventFor(meta *w17pb.RequestEventMeta) (brevo.Event, bool) {
 	user := meta.GetUserId()
 	if user == "" {
 		return brevo.Event{}, false
@@ -191,10 +226,11 @@ func eventFor(meta *w17pb.RequestEventMeta, consentAttr string) (brevo.Event, bo
 			props["referrer"] = r
 		}
 	}
-	contact := map[string]any{}
-	if meta.MarketingConsent != nil {
-		contact[consentAttr] = meta.GetMarketingConsent()
-	}
+	// Nothing goes to the contact (ContactProperties): the consent attribute
+	// comes only from the Contact row, dated, by the consent handler. The
+	// record's consent is the request's snapshot (its authentication, cached
+	// for minutes), and a record delivered after the user's decision — a
+	// backlog, a redelivery, a replay — would move the attribute back.
 	ev := brevo.Event{
 		EventName:       eventName(meta.GetMethod()),
 		Identifiers:     brevo.Identifiers{ExtID: user},
@@ -202,9 +238,6 @@ func eventFor(meta *w17pb.RequestEventMeta, consentAttr string) (brevo.Event, bo
 	}
 	if st := meta.GetStart(); st != nil {
 		ev.EventDate = st.AsTime().UTC().Format(time.RFC3339Nano)
-	}
-	if len(contact) > 0 {
-		ev.ContactProperties = contact
 	}
 	return ev, true
 }
