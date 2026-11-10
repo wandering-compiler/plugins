@@ -6,7 +6,7 @@ application built on it relies on. It is the reference the plugin's tests and
 the example projects are measured against. A property listed here without a
 proof is a gap, not a promise.
 
-It covers plugin version 0.1.0-rc.5.
+It covers plugin version 0.1.0-rc.7 and the unreleased changes in `changes/`.
 
 The plugin is an **engine**, not a chat product. It makes model calls and runs
 a tool-calling loop. It has no conversation table, no history, no user and no
@@ -234,7 +234,7 @@ which.
 | `usage_persistence/blank-scope-uncapped` | A blank scope MUST be allowed without a database round trip and without interning a scope row. | Performance | `TestDBLimiter_ABlankScopeIsNotCapped` |
 | `usage_persistence/limiter-steady-state-free` | In steady state, a call for a known scope MUST cost the limiter no database round trip. | Performance | `TestDBLimiter_TheSteadyStateAsksTheDatabaseNothing` |
 | `usage_persistence/wiring-verified-at-boot` | With the feature on, a bundle in which the database sink was not installed MUST fail `RegisterPlugin`. | Failure & configuration | `TestVerifyUsageWiringAgreesWithTheActivation`, `TestUsageSink_WithoutTheClientStaysTheNoop`, `TestTheNoopSinkSwallowsEverything` |
-| `usage_persistence/limiter-wiring-verified` | With the feature on, a bundle in which the database limiter was not installed MUST fail `RegisterPlugin`. | Failure & configuration | TestVerifyLimiterWiring, TestNewLimiter_NeedsBothClients (finding 12 fixed) |
+| `usage_persistence/limiter-wiring-verified` | With the feature on, a bundle in which the database limiter was not installed MUST fail `RegisterPlugin`. | Failure & configuration | `TestVerifyLimiterWiring`, `TestNewLimiter_NeedsBothClients` (finding 12 fixed) |
 | `usage_persistence/tables-declared` | The manifest's description MUST name every table the feature adds, so the migration it schedules is visible before activation. | Failure & configuration | `TestUsageManifestNamesEveryTable` |
 
 **Gaps / suspected defects**
@@ -267,11 +267,14 @@ which.
   the removal site only, a space left doubled, before `.,;:!?)]}`, before a
   line break or at the end of the text is dropped; nothing else of the text
   changes, and a text with nothing to remove is returned as it came.
-- **MUST.** An unknown script, or none, in `allowed_scripts` refuses the boot.
-  `FinalText.allowed_scripts` replaces the activation's scripts for the call;
-  an unknown name is `InvalidArgument` and any name to an activation without
-  the feature is `FailedPrecondition`, both before the model is called.
-  `FinalText.raw` returns the deltas unfiltered.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| `final_text_scripts/final-text-only` | The filter MUST clean `CompleteResp.text` and the `Finished.text` of `CompleteStream` and `RunAgent`, and MUST NOT touch a `TextDelta`. | Consistency & concurrency | `TestFinalText_Complete`, `TestFinalText_StreamFiltersOnlyTheFinishedText`, `TestFinalText_RunAgent` |
+| `final_text_scripts/removes-only-disallowed` | A rune of a script not allowed MUST be dropped with the `Inherited` marks and ZWJ/ZWNJ right after it; `Common` and `Inherited` MUST always be allowed; only the spacing at a removal site MUST change, and a text with nothing to remove MUST come back as it came. | Consistency & concurrency | `TestScripts`, `TestScripts_MarksGoWithTheirLetter`, `TestScripts_SeveralAllowed`, `TestChain` |
+| `final_text_scripts/boot-refuses-unknown` | An unknown script, or none, in `allowed_scripts` MUST refuse the boot. | Failure & configuration | `TestNewScripts_Refusals`, `TestFinalTextFilters_FromTheActivation` |
+| `final_text_scripts/per-call-refused-before-model` | `FinalText.allowed_scripts` MUST replace the activation's scripts for the call; an unknown name MUST be `InvalidArgument`, and any name to an activation without the feature `FailedPrecondition`, both before the model is called, on every entry point. | Failure & configuration | `TestFinalText_RefusedBeforeTheModelIsCalled` |
+| `final_text_scripts/raw-skips` | `FinalText.raw` MUST return the final text unfiltered. | Consistency & concurrency | `TestFinalText_RawSkipsTheHooks` |
 
 ### final_text_invisible
 
@@ -281,7 +284,11 @@ which.
   than tab, LF and CR, U+FFFD, U+200B, U+2060, U+FEFF and the bidi controls
   U+202A–U+202E and U+2066–U+2069. U+200C/U+200D (emoji sequences, several
   scripts) and U+200E/U+200F stay. It runs before `final_text_scripts`.
-- **MUST.** `FinalText.raw` skips it.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| `final_text_invisible/removes-only-invisible` | The filter MUST remove exactly the characters listed above and keep tab, LF, CR, U+200C/U+200D and U+200E/U+200F; it MUST run before `final_text_scripts`. | Consistency & concurrency | `TestInvisible`, `TestChain`, `TestFinalTextFilters_FromTheActivation` |
+| `final_text_invisible/raw-skips` | `FinalText.raw` MUST skip it. | Consistency & concurrency | `TestFinalText_RawSkipsTheHooks` |
 
 ### The `text_filter` hook (all activations)
 
@@ -296,10 +303,14 @@ which.
 - **Mechanics.** `handlers/final_text.go`: after the built-in filters, each
   bound method runs in order on the previous one's text, bounded by the
   timeout; its response text replaces the text.
-- **MUST.** A hook that fails or times out is skipped and logged (its gRPC
-  code, never the text); the next one still runs and the answer still reaches
-  the caller. `FinalText.raw` skips the hooks with the built-ins. An
-  activation that binds none behaves as without the hook.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| `text_filter/in-order-after-built-ins` | Bound hooks MUST run in the order bound, each on the previous one's text, after the built-in filters, on the final text only; a hook's response text MUST replace the text, an explicit empty text included. | Consistency & concurrency | `TestFinalText_HooksRunInOrderAfterTheBuiltIns`, `TestFinalText_ANilResponseIsSkippedAnEmptyTextStands` |
+| `text_filter/failure-keeps-the-answer` | A hook that fails, does not answer within `text_filter_timeout_seconds`, or returns no response and no error MUST be skipped and logged by its gRPC code (or "no response"), never the text; the next hook MUST still run and the answer MUST still reach the caller. | Failure & configuration | `TestFinalText_AFailedHookIsSkipped`, `TestFinalText_ANilResponseIsSkippedAnEmptyTextStands` |
+| `text_filter/timeout` | `text_filter_timeout_seconds > 0` MUST bound each hook on its own; `<= 0` MUST leave a hook only the call's own deadline. | Failure & configuration | `TestFinalText_ANonPositiveHookTimeoutIsTheCallsDeadline` |
+| `text_filter/raw-skips` | `FinalText.raw` MUST skip the hooks with the built-ins. An activation that binds none MUST behave as without the hook. | Consistency & concurrency | `TestFinalText_RawSkipsTheHooks`, `TestFinalTextFilters_FromTheActivation` |
+| `text_filter/content-leaves-to-project-code` | The hook MUST receive the final answer's text with `method`, `model`, `usage_scope` and `usage_labels`, and nothing else of the request (no prompt, history or tool data). The answer and its attribution leave the plugin to the project's own business methods by design: those methods MUST be treated as handling end-user content (no logging of the text, the project's own access rules). | Security | `TestFinalText_HooksRunInOrderAfterTheBuiltIns` (the fields carried) |
 
 ## Across features
 
@@ -317,26 +328,30 @@ Every interaction goes through one of these mechanisms:
 ### Feature interaction matrix
 
 Abbreviations: **b** base tier, **up** usage_persistence, **fs**
-final_text_scripts, **fi** final_text_invisible.
+final_text_scripts, **fi** final_text_invisible, **tf** the `text_filter`
+hook (every activation that binds it).
 
 Cell codes: **H** one overrides the other's seam · **T** shared table · **Q**
 shared RPC or helper · **O** ordering constraint inside one request · **·** no
 interaction.
 
-|    | b | up | fs | fi |
-|----|----|----|----|----|
-| **b** | — | H Q O | O | O |
-| **up** | | — | · | · |
-| **fs** | | | — | O |
+|    | b | up | fs | fi | tf |
+|----|----|----|----|----|----|
+| **b** | — | H Q O | O | O | O |
+| **up** | | — | · | · | · |
+| **fs** | | | — | O | O |
+| **fi** | | | | — | O |
 
 The final-text filters run after the answer is complete and before
-`CompleteResp` / `Finished` is sent (**O**), invisible before scripts; usage is
-recorded from the model's own output and never sees the filtered text.
+`CompleteResp` / `Finished` is sent (**O**), invisible before scripts and the
+`text_filter` hooks after both; usage is recorded from the model's own output
+and never sees the filtered text.
 
 ### Interaction invariants
 
 | ID | Features | Mechanism | MUST hold | Proof |
 |---|---|---|---|---|
+| `interaction/final-text-order` | b fs fi tf | O | The final text MUST pass `final_text_invisible`, then `final_text_scripts`, then each bound hook in order, after the answer is complete and before `CompleteResp` / `Finished` is sent; usage MUST be recorded from the model's own output, never from the filtered text. | `TestFinalText_HooksRunInOrderAfterTheBuiltIns`, `TestChain`, `TestFinalText_StreamFiltersOnlyTheFinishedText` |
 | `interaction/base-usage_persistence-wire-unchanged` | b up | Ungated fields | The business request and response shapes MUST be identical with the feature on or off. With it off, `usage_scope` and `usage_labels` MUST be accepted and ignored, no table MUST exist, and no write MUST be attempted. | `TestTheNoopSinkSwallowsEverything`, `TestTheAllowAllLimiterLetsEverythingThrough` (build of an activation without the feature: example-level only) |
 | `interaction/base-usage_persistence-limit-then-preflight-then-record` | b up | O | On every entry point the order MUST be: limit check, then preflight, then the provider call, then exactly one usage event per provider call (one for `Complete` and `CompleteStream`, one per sent turn for `RunAgent`). A refusal at any step before the provider, or a caller whose context had already ended, MUST leave no event. | `TestRefusalsNeverReachTheProvider`, `TestAnOverBudgetScopeNeverReachesTheProvider`, `TestAPreflightRefusalIsNotRecordedAsACall`, `TestRunAgent_APreflightRefusalIsNotRecordedAsACall`, `TestRunAgent_AsksTheLimitLikeTheOtherTwoEntryPoints`, `TestComplete_ACallerAlreadyGoneSendsNothingAndWritesNoRow`, `TestCompleteStream_ACallerAlreadyGoneSendsNothingAndWritesNoRow`, `TestRunAgent_ARunThatSentNothingWritesNoRow` |
 | `interaction/base-usage_persistence-run-row-per-turn` | b up | Q: `recordUsageFor` | A run MUST be recorded as one row per turn it sent, each with that turn's spend, outcome and start time, as the contract on `RunAgentReq.Start` says. A turn never sent (refused before the request, or after the context ended) MUST write no row. | `TestRunAgent_RecordsTheSpendOfEveryTurn`, `TestRunAgent_FailuresAreCodedAndStillBilled`, `TestRunAgent_ARunThatSentNothingWritesNoRow`, `TestTurnOutcome` |
@@ -405,7 +420,9 @@ whatever they are asked by whoever can reach them.
 | `agent/boot-serves-nothing-on-error` | any refused config registers neither the service nor the shutdown hook | `RegisterPlugin` | `TestRegisterPlugin_RefusesABadConfigAndServesNothing` |
 | `agent/boot-defaults` | `max_output_tokens <= 0` → 4096; `request_timeout_seconds <= 0` → 120; `default_model` trimmed | `RegisterPlugin`, `NewClient` | `TestRegisterPlugin_AppliesTheDocumentedDefaults` |
 | `agent/boot-usage-wiring` | feature on, no database sink | `VerifyUsageWiring` | `TestVerifyUsageWiringAgreesWithTheActivation` |
-| **Not** boot-checked (gaps) | feature on, no database limiter (finding 12); a negative `max_output_tokens` or `request_timeout_seconds` silently replaced by the default rather than refused; an `api_version` the provider does not know (fails per call) | — | none |
+| `agent/boot-usage-limiter-wiring` | feature on, no database limiter (finding 12, fixed) | `VerifyLimiterWiring` in `RegisterPlugin` | `TestVerifyLimiterWiring`, `TestNewLimiter_NeedsBothClients` |
+| `agent/boot-final-text-scripts` | `final_text_scripts` on and `allowed_scripts` naming an unknown script, or none | `RegisterPlugin` → `textfilter.NewScripts` | `TestNewScripts_Refusals`, `TestFinalTextFilters_FromTheActivation` |
+| **Not** boot-checked (gaps) | a negative `max_output_tokens` or `request_timeout_seconds` silently replaced by the default rather than refused; an `api_version` the provider does not know (fails per call) | — | none |
 
 #### Transactions (one unit of work)
 
