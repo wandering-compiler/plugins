@@ -937,3 +937,39 @@ func TestConsumeMarketing_AFailedRecordResendsOnlyItself(t *testing.T) {
 		t.Errorf("the redelivery sent %d batches, the last of %d events; want the one unrecorded event alone", len(f.batches), len(f.batches[len(f.batches)-1]))
 	}
 }
+
+// brevo/no-personal-extras: the referrer goes to Brevo as its origin and
+// path only — a query string or fragment can carry an address, a token, a
+// document's name — and a UTM value is bounded, so a personalised link does
+// not ship its parameters into the marketing tool with every request.
+func TestEventFor_TheReferrerWithoutItsQueryAndBoundedUTM(t *testing.T) {
+	long := strings.Repeat("x", 600)
+	ev, ok := eventFor(&w17pb.RequestEventMeta{
+		UserId: "u1", Method: createTask,
+		Client: &w17pb.RequestClient{
+			Referrer: "https://mail.example/inbox/doc.pdf?to=a%40x.example&token=s3cret#p2",
+			Utm:      map[string]string{"source": "news", "content": long, long: "v"},
+		},
+	})
+	if !ok {
+		t.Fatal("no event")
+	}
+	if got := ev.EventProperties["referrer"]; got != "https://mail.example/inbox/doc.pdf" {
+		t.Errorf("referrer = %v, want its origin and path only", got)
+	}
+	if got, _ := ev.EventProperties["utm_content"].(string); len(got) != maxUTMValue {
+		t.Errorf("utm_content has %d characters, want it cut at %d", len(got), maxUTMValue)
+	}
+	for k := range ev.EventProperties {
+		if len(k) > 4+maxUTMValue {
+			t.Errorf("a property name of %d characters", len(k))
+		}
+	}
+	if ev.EventProperties["utm_source"] != "news" {
+		t.Errorf("utm_source = %v", ev.EventProperties["utm_source"])
+	}
+	ev, _ = eventFor(&w17pb.RequestEventMeta{UserId: "u1", Method: createTask, Client: &w17pb.RequestClient{Referrer: "not a url\x7f"}})
+	if r, ok := ev.EventProperties["referrer"]; ok {
+		t.Errorf("an unparsable referrer was sent: %v", r)
+	}
+}
