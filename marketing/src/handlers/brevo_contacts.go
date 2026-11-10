@@ -11,6 +11,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wandering-compiler/sdk/go/core/observx"
+
 	pb "github.com/wandering-compiler/plugins/marketing/gen/pb"
 	"github.com/wandering-compiler/plugins/marketing/lib/brevo"
 )
@@ -164,13 +166,13 @@ func (t *brevoTool) followAddress(ctx context.Context, what, user, email string,
 		return nil
 	}
 	if !st.blacklisted() {
-		if err := t.contactCall(what, user, t.writeLeavingBlacklisted(ctx, user, email, attrs)); err != nil {
+		if err := t.contactCall(ctx, what, user, t.writeLeavingBlacklisted(ctx, user, email, attrs)); err != nil {
 			return err
 		}
 		return t.undoForErased(ctx, user)
 	}
 	if err := t.writeBlacklisted(ctx, user, email, attrs); err != nil {
-		if err := t.contactCall(what, user, err); err != nil {
+		if err := t.contactCall(ctx, what, user, err); err != nil {
 			return err
 		}
 		return t.undoForErased(ctx, user)
@@ -189,7 +191,7 @@ func (t *brevoTool) followAddress(ctx context.Context, what, user, email string,
 	if now.blacklisted() {
 		return nil
 	}
-	if err := t.contactCall(what, user, t.subscribe(ctx, user, merged(attrs, t.consentAttrs(now)), now, *now.consentAt, true)); err != nil {
+	if err := t.contactCall(ctx, what, user, t.subscribe(ctx, user, merged(attrs, t.consentAttrs(now)), now, *now.consentAt, true)); err != nil {
 		return err
 	}
 	return t.undoForErased(ctx, user)
@@ -286,7 +288,7 @@ func (t *brevoTool) onUserDeleted(ctx context.Context, ev *pb.AuthUserDeleted) e
 			return err
 		}
 	}
-	return t.contactCall("delete the contact of", user, t.client.DeleteContact(ctx, user))
+	return t.contactCall(ctx, "delete the contact of", user, t.client.DeleteContact(ctx, user))
 }
 
 // onConsentChanged keeps the user's decision — when it is newer than the one
@@ -332,7 +334,7 @@ func (t *brevoTool) onConsentChanged(ctx context.Context, ev *pb.AuthMarketingCo
 	default:
 		werr = t.subscribe(ctx, user, attrs, st, at, false)
 	}
-	if err := t.contactCall("set the consent of", user, werr); err != nil {
+	if err := t.contactCall(ctx, "set the consent of", user, werr); err != nil {
 		return err
 	}
 	return t.undoForErased(ctx, user)
@@ -432,20 +434,30 @@ func (t *brevoTool) undoForErased(ctx context.Context, users ...string) error {
 				return err
 			}
 		}
-		if err := t.contactCall("delete the contact of", u, t.client.DeleteContact(ctx, u)); err != nil {
+		if err := t.contactCall(ctx, "delete the contact of", u, t.client.DeleteContact(ctx, u)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (t *brevoTool) contactCall(what, user string, err error) error {
+// contactCall is what a contact write's outcome does to the auth event: a
+// failure that may pass is returned (the event is redelivered); a refusal
+// for the content (400, 422) is not — it would fail the same way — and is
+// reported as a fault (reportFault), since the contact then lacks what the
+// write carried (an address, a sign-up date) and nothing writes it again
+// unprompted.
+func (t *brevoTool) contactCall(ctx context.Context, what, user string, err error) error {
 	if err == nil {
 		return nil
 	}
 	if user == "" || brevo.Refused(err) {
-		log.Printf("marketing plugin: Brevo refused to %s user %s: %v", what, user, err)
+		reportFault(ctx, fmt.Errorf("marketing plugin: Brevo refused to %s user %s: %w", what, user, err))
 		return nil
 	}
 	return fmt.Errorf("marketing plugin: %s user %s: %w", what, user, err)
 }
+
+// reportFault reports a write the plugin dropped: the bundle's error
+// reporter (Sentry and the trace when configured, the log otherwise).
+var reportFault = observx.ReportError

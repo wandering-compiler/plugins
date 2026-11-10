@@ -139,7 +139,7 @@ func (t *brevoTool) writeUserActivity(ctx context.Context, user string, attrs ma
 		}
 		// A contact Brevo lacks is created blacklisted, as every contact the
 		// plugin did not subscribe on a consent.
-		if err := t.contactCall("write the activity of", user, t.writeLeavingBlacklisted(ctx, user, "", now)); err != nil {
+		if err := t.contactCall(ctx, "write the activity of", user, t.writeLeavingBlacklisted(ctx, user, "", now)); err != nil {
 			return err
 		}
 		written = now

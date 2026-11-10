@@ -37,7 +37,7 @@ gap, not a promise. The handler tests run against a fake Brevo and in-memory
 | id | invariant | category | proof |
 |---|---|---|---|
 | `brevo/sent-once` | A record Brevo accepted MUST NOT be sent again when the stream redelivers its batch. A record MUST be recorded as sent only after Brevo answered for it. | Consistency & concurrency | `TestConsumeMarketing_SkipsWhatWasSentAndRecordsWhatIs`, `TestConsumeMarketing_ATransientFailureRecordsNothing`, `TestRecordSent_AnotherReplicaFirstIsTheSameOutcome`. **Unit (mock) only:** a live test would kill the bundle between Brevo's answer and the record and show at most one duplicate. |
-| `brevo/transient-is-redelivered` | A network failure, 429 past its waits, 5xx, or a key or server address the account does not accept (401, 403) MUST fail the call so the stream redelivers it and, past the retries, dead-letters it for a replay; only a call Brevo refuses for its content (400, 422) MUST be dropped. | Failure & configuration | `TestConsumeMarketing_ATransientFailureRecordsNothing`, `TestConsumeMarketing_ARefusedEventIsNotRetried`, `TestContacts_RetryOnlyWhatMaySucceed`, `TestRetryable`, `TestRefused_OnlyWhatTheContentCauses`, `TestDo_GivesUpOnARateLimitThatDoesNotLift` |
+| `brevo/transient-is-redelivered` | A network failure, 429 past its waits, 5xx, or a key or server address the account does not accept (401, 403) MUST fail the call so the stream redelivers it and, past the retries, dead-letters it for a replay; only a call Brevo refuses for its content (400, 422) MUST be dropped, and a dropped contact write MUST be reported through the bundle's error reporter (observx: Sentry and the trace when configured), not only logged — the contact then lacks what it carried (gap 7). | Failure & configuration | `TestConsumeMarketing_ATransientFailureRecordsNothing`, `TestConsumeMarketing_ARefusedEventIsNotRetried`, `TestContacts_RetryOnlyWhatMaySucceed`, `TestContacts_ARefusedContactWriteIsReported`, `TestRetryable`, `TestRefused_OnlyWhatTheContentCauses`, `TestDo_GivesUpOnARateLimitThatDoesNotLift` |
 | `brevo/selection` | `send` MUST choose by kind (a method reads when served as GET or a Query service's), `include` add, `exclude` remove and win. A configured method the stream does not record MUST fail the boot. | Failure & configuration | `TestConsumeMarketing_SendsWhatTheSelectionSays`, `TestNewSelection_RefusesWhatTheStreamDoesNotRecord` |
 | `brevo/no-personal-extras` | An event MUST NOT carry the IP address, the user agent or the request's fields; an unknown consent MUST NOT be written as false. | Security | `TestEventFor` |
 | `brevo/consent-from-the-row` | An event MUST NOT write to the contact (no `contact_properties`): the consent attribute MUST be written only from the `Contact` row as stored, with the day it was decided. A record's consent is its request's snapshot (taken at its authentication, which the gateway caches for minutes); a record delivered after the user's decision — a backlog, a redelivery, a dead-letter replay — MUST NOT move the attribute back. | Consistency & concurrency | `TestEventFor`, `TestEventFor_WritesNothingToTheContact` |
@@ -122,6 +122,14 @@ gap, not a promise. The handler tests run against a fake Brevo and in-memory
    attributes an account may hold are not documented there: a name it refuses
    is logged at boot and retried, and that method's dates are dropped by Brevo
    until it exists.
+7. **The sign-up date is written once.** `W17_SIGNED_UP_AT` (and, until the
+   next `UserUpdated`, the address) is written only by `UserCreated`'s
+   contact write. When Brevo refuses that write for its content (400/422:
+   an address another contact in the account already holds, an address its
+   own syntax check refuses) the write is dropped and reported
+   (`brevo/transient-is-redelivered`), and no later write carries the date:
+   the `Contact` row does not keep the account's creation time, and keeping
+   it would need a new column. The address follows the next `UserUpdated`.
 
 
 **Fixed**

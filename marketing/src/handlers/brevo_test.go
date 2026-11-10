@@ -872,3 +872,30 @@ func count(xs []string, x string) int {
 	}
 	return n
 }
+
+// A contact write Brevo refuses for its content (400/422) is not retried —
+// retrying fails the same way — but it is reported as a fault, not only
+// logged: the contact then lacks its address and, for UserCreated, its
+// sign-up date, which nothing writes again (SPEC gap 7).
+func TestContacts_ARefusedContactWriteIsReported(t *testing.T) {
+	var reported []error
+	defer func(prev func(context.Context, error)) { reportFault = prev }(reportFault)
+	reportFault = func(_ context.Context, err error) { reported = append(reported, err) }
+
+	ctx := context.Background()
+	refused := tool(t, &fakeBrevo{callErr: &brevo.Error{Status: 400, Message: "duplicate_parameter"}}, &ledger{}, "all", "", "")
+	if err := refused.onUserCreated(ctx, &pb.AuthUserCreated{UserId: "u1", Email: "a@x.example"}); err != nil {
+		t.Fatalf("a refusal = %v, want nil", err)
+	}
+	if len(reported) != 1 || !strings.Contains(reported[0].Error(), "u1") || !brevo.Refused(reported[0]) {
+		t.Errorf("reported = %v, want the one refusal, naming the user", reported)
+	}
+	reported = nil
+	transient := tool(t, &fakeBrevo{callErr: &brevo.Error{Status: 503}}, &ledger{}, "all", "", "")
+	if err := transient.onUserCreated(ctx, &pb.AuthUserCreated{UserId: "u2", Email: "b@x.example"}); err == nil {
+		t.Fatal("a transient failure was swallowed")
+	}
+	if len(reported) != 0 {
+		t.Errorf("a transient failure (redelivered) was reported as a lost write: %v", reported)
+	}
+}
