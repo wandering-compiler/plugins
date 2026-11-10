@@ -1497,6 +1497,14 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (_ *
 		signInDummyVerify(h, req.GetPassword())
 		return nil, UnauthenticatedSignIn(err)
 	}
+	// A stored hash no algorithm can verify — a machine account's "!", an
+	// erased account's placeholder — is refused by Verify at once, without a
+	// derivation. Pay one anyway, so the time of the refusal does not tell
+	// such an account's address apart from an unknown one or a wrong password.
+	if !passwordhash.Verifiable(user.GetPasswordHash()) {
+		signInDummyVerify(h, req.GetPassword())
+		return nil, UnauthenticatedSignIn(errAuthnPasswordMismatch)
+	}
 	ok, _, _ := h.PasswordHash.VerifyAndRotate(user.GetPasswordHash(), req.GetPassword(), h.rehashOnSignIn(ctx, user))
 	if !ok {
 		return nil, UnauthenticatedSignIn(errAuthnPasswordMismatch)

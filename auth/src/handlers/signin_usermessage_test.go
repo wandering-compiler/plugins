@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"errors"
 	"testing"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
@@ -48,8 +50,10 @@ func signInDetail(t *testing.T, h *AuthServiceHandler, email, password string) *
 	return nil
 }
 
-// signInRefusalCases builds a handler for each of the four gates SignIn
-// refuses a submitted credential at.
+// signInRefusalCases builds a handler for each refusal SignIn answers a
+// submitted credential with: no such account, wrong password, a machine
+// account (with a password and with the "!" sentinel), a spent guess budget
+// and a disabled account.
 func signInRefusalCases(t *testing.T) map[string]func() (*AuthServiceHandler, string, string) {
 	t.Helper()
 	ps := testPasswordSettings()
@@ -86,6 +90,24 @@ func signInRefusalCases(t *testing.T) map[string]func() (*AuthServiceHandler, st
 				PasswordHash: s,
 			}, "ci@example.com", password
 		},
+		"machine account without a password": func() (*AuthServiceHandler, string, string) {
+			// The "!" sentinel CreateBotUser and erasure write: no algorithm
+			// verifies it.
+			return &AuthServiceHandler{
+				Query:        signInBotQuery{kind: pb.AccountKind_BOT, hash: "!"},
+				PasswordHash: ps,
+			}, "ci@example.com", password
+		},
+		"spent guess budget": func() (*AuthServiceHandler, string, string) {
+			// One wrong guess spends a budget of one; the right password from a
+			// key that never signed in is then refused by the budget.
+			_, h := newBudgetStore(t, "u1")
+			h.SignInFailureBudget = 1
+			if err := signIn(h, testJKT, "wrong-password"); err == nil || errors.Is(err, errSignInThrottled) {
+				t.Fatalf("the first guess: %v, want a wrong password", err)
+			}
+			return h, "u1@example.com", devicePassword
+		},
 		"disabled account": func() (*AuthServiceHandler, string, string) {
 			return &AuthServiceHandler{
 				Query: disabledUserQuery{user: &pb.User{
@@ -116,20 +138,26 @@ func TestSignIn_EveryRefusalReachesTheWireWithAMessage(t *testing.T) {
 	}
 }
 
-// And they must be INDISTINGUISHABLE from each other.
+// And they must be INDISTINGUISHABLE from each other — on the whole wire
+// status, not only the detail: code, status message and every detail.
 //
 // This is the anti-enumeration rule asserted where it is actually exposed. A
 // friendlier sentence for "no such account" than for "wrong password" is an
 // email oracle, and so is a different code — the opaque status underneath
 // does not help once a detail rides along with it.
-func TestSignIn_TheFourRefusalsAreIndistinguishable(t *testing.T) {
-	type seen struct{ code, msg string }
-	got := map[string]seen{}
+func TestSignIn_TheRefusalsAreIndistinguishable(t *testing.T) {
+	got := map[string]*status.Status{}
 	for name, build := range signInRefusalCases(t) {
 		pinConsoleActivation(t)
 		h, email, password := build()
-		d := signInDetail(t, h, email, password)
-		got[name] = seen{d.GetCode(), d.GetMessage()}
+		_, err := h.SignIn(mintCtx(), &pb.SignInReq{Email: email, Password: password})
+		if err == nil {
+			t.Fatalf("%q: SignIn succeeded where the test needs a refusal", name)
+		}
+		got[name] = status.Convert(err)
+	}
+	if len(got) != 6 {
+		t.Fatalf("%d refusal cases, want 6", len(got))
 	}
 
 	var first string
@@ -139,10 +167,10 @@ func TestSignIn_TheFourRefusalsAreIndistinguishable(t *testing.T) {
 		}
 	}
 	want := got[first]
-	for name, s := range got {
-		if s != want {
-			t.Errorf("%q renders %q/%q but %q renders %q/%q — that difference enumerates accounts",
-				name, s.code, s.msg, first, want.code, want.msg)
+	for name, st := range got {
+		if !proto.Equal(st.Proto(), want.Proto()) {
+			t.Errorf("%q answers %v but %q answers %v — that difference enumerates accounts",
+				name, st.Proto(), first, want.Proto())
 		}
 	}
 }

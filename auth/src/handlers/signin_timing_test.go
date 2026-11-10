@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
+	"github.com/wandering-compiler/plugins/auth/lib/passwordhash"
 )
 
 // signInNotFoundQuery embeds the generated client (nil) to satisfy
@@ -60,5 +61,31 @@ func TestSignIn_NormalizesEmailForLookup(t *testing.T) {
 	_, _ = h.SignIn(mintCtx(), &pb.SignInReq{Email: "  Foo@X.COM ", Password: "pw"})
 	if m.gotEmail != "foo@x.com" {
 		t.Errorf("GetUserByEmail email = %q, want normalized %q", m.gotEmail, "foo@x.com")
+	}
+}
+
+// An account whose stored hash no algorithm can verify — a machine account's
+// "!" sentinel, an erased account's placeholder — must cost what a wrong
+// password costs. passwordhash.Verify returns at once for such a hash, so
+// without the throwaway verify the refusal came back in nanoseconds where an
+// unknown address and a wrong password pay the derivation: the response time
+// told a machine account's address apart (auth/sign-in-constant).
+func TestSignIn_AnUnverifiableStoredHashRunsDummyVerify(t *testing.T) {
+	for _, stored := range []string{"!", "", "not-a-phc-hash"} {
+		called := false
+		orig := signInDummyVerify
+		signInDummyVerify = func(*AuthServiceHandler, string) { called = true }
+		h := &AuthServiceHandler{
+			Query:        signInBotQuery{kind: pb.AccountKind_BOT, hash: stored},
+			PasswordHash: passwordhash.DefaultSettings(),
+		}
+		_, err := h.SignIn(mintCtx(), &pb.SignInReq{Email: "ci@example.com", Password: "any-password"})
+		signInDummyVerify = orig
+		if err == nil {
+			t.Fatalf("stored %q: SignIn succeeded", stored)
+		}
+		if !called {
+			t.Errorf("stored %q: SignIn refused without the throwaway verify — a timing oracle for the account's kind", stored)
+		}
 	}
 }
