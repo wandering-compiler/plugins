@@ -264,8 +264,18 @@ func dispatch(
 	limits Limits,
 	sink func(RunEvent) error,
 ) ([]string, error) {
-	// The whole round is reserved up front — see budget.reserve.
-	if err := b.reserve(len(calls)); err != nil {
+	// The whole round is reserved up front — see budget.reserve. Only the
+	// calls that will be DISPATCHED count: a name the model invented never
+	// runs (execTool answers it locally), and charging it ended a round of
+	// hallucinated names as over budget, with the real calls beside them not
+	// applied and the model never hearing its correction.
+	dispatched := 0
+	for _, tc := range calls {
+		if byName[tc.Name] != nil {
+			dispatched++
+		}
+	}
+	if err := b.reserve(dispatched); err != nil {
 		return nil, err
 	}
 	res := newResults(len(calls))

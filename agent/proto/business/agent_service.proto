@@ -282,6 +282,8 @@ message Limits {
   // work against YOUR database: untrusted text reaches the model, and a model
   // told to "look up three hundred places" emits three hundred calls in one
   // round. max_parallel bounds how many run at once — not how many run.
+  // Only calls to a declared tool count: one to a name the model invented is
+  // answered "no such tool" without running, and spends nothing.
   int32 max_tool_calls = 2;
 
   // How many read-only calls run at once.
