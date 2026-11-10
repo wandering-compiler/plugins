@@ -202,11 +202,13 @@ func TestFlow_RefundMadeBeforeTheUpgrade_StampOutcomes(t *testing.T) {
 }
 
 // A concurrent request under the same key recorded its refund first: that
-// refund answers this one only when it is the same refund.
+// refund answers this one only when it is the same refund. The other request
+// held the payment's lock first, so its row is committed by the time this one
+// takes the lock (its insert, made under the lock, cannot land later).
 func TestFlow_RefundKeyRace_ComparesTheRecordedRefund(t *testing.T) {
 	r := newRig(t)
 	p := r.paid("user-a", 100000, "k")
-	r.store.onceBefore("CreateRefund", func() {
+	r.store.onceBefore("acquire:LockPaymentForRefund", func() {
 		_, _ = r.store.CreateRefund(bg, &pb.CreateRefundReq{PaymentId: p.GetId(), ProviderRefundId: "re_concurrent", Amount: 30000, Currency: "usd", IdempotencyKey: refundKey("race"), Status: int32(pb.Refund_SUCCEEDED)})
 	})
 	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 40000, IdempotencyKey: "race"})

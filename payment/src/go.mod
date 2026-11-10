@@ -3,6 +3,7 @@ module github.com/wandering-compiler/plugins/payment
 go 1.26.1
 
 require (
+	github.com/lib/pq v1.12.3
 	github.com/wandering-compiler/sdk/go v0.1.0-rc.24
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11

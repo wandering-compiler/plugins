@@ -482,21 +482,25 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	var resp *pb.RefundPaymentResp
 	var fresh bool
 	if found {
-		resp, fresh, err = h.recordOwnRefund(ctx, payment, res, amount, storedKey)
+		resp, fresh, err = h.recordOwnRefund(ctx, ctx, payment, res, amount, storedKey)
 	} else {
-		// Checked and made under the payment's row lock, held until the
-		// refund is recorded: a second refund of this payment waits here and
-		// then counts the first one (refundAllowed).
-		err = h.underRefundLock(ctx, payment.GetId(), func(txCtx context.Context, locked *pb.LockPaymentForRefundResp) error {
+		// Checked, made and recorded under the payment's row lock: a second
+		// refund of this payment waits here and then counts the first one
+		// (refundAllowed). The Refund row is written INSIDE the transaction
+		// that holds the lock (txCtx) and commits with it — its foreign key
+		// to the locked payment row is checked on the lock holder's own
+		// connection. Written on another connection, that check waits for
+		// the lock this call holds until the transaction times out.
+		err = h.underRefundLock(ctx, payment.GetId(), func(ctx, txCtx context.Context, locked *pb.LockPaymentForRefundResp) (bool, error) {
 			if err := h.refundAllowed(ctx, txCtx, payment, locked, amount); err != nil {
-				return err
+				return false, err
 			}
 			// A top-up's credit leaves with its money (prepaid; no-op
 			// otherwise). Taken before the provider is asked, so a refund of
 			// spent credit is refused instead of paid out.
 			undo, err := takeBackRefundedCredit(ctx, h, payment, amount, req.GetIdempotencyKey())
 			if err != nil {
-				return err
+				return false, err
 			}
 			res, err = h.Backend.RefundPayment(ctx, payment.GetProviderPaymentId(),
 				backend.Money{Amount: amount, Currency: refundCurrency(payment)},
@@ -512,13 +516,15 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 						// The provider's text stays in the log, like every other
 						// provider failure: it can carry the request's details.
 						slog.Warn("payment: refund refused, credit not given back yet", "err", err, "undo_err", uerr)
-						return status.Error(codes.Unavailable, "payment: the refund was refused and its credit could not be given back yet; retry")
+						return false, status.Error(codes.Unavailable, "payment: the refund was refused and its credit could not be given back yet; retry")
 					}
 				}
-				return providerFailure(err)
+				return false, providerFailure(err)
 			}
-			resp, fresh, err = h.recordOwnRefund(ctx, payment, res, amount, storedKey)
-			return err
+			resp, fresh, err = h.recordOwnRefund(ctx, txCtx, payment, res, amount, storedKey)
+			// Only a row this call inserted is the transaction's to commit;
+			// an answer found in another writer's row wrote nothing here.
+			return fresh, err
 		})
 	}
 	if err != nil {
@@ -543,11 +549,16 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 // refundLockTimeout bounds a transaction that holds a row lock through a
 // refund or a subscribe: each provider call is bounded at 20 s, and the lock
 // is released when the result is recorded.
-const refundLockTimeout = 60 * time.Second
+var refundLockTimeout = 60 * time.Second
+
+// lockedWorkMargin is how long before refundLockTimeout the work under a row
+// lock is cut off (see inLockedTx), so the transaction is always ended by the
+// handler — never by the coordinator's timeout with the work still running.
+var lockedWorkMargin = 10 * time.Second
 
 // underRefundLock runs fn while the payment's row is locked
 // (LockPaymentForRefund) — see inLockedTx.
-func (h *PaymentServiceHandler) underRefundLock(ctx context.Context, paymentID string, fn func(txCtx context.Context, locked *pb.LockPaymentForRefundResp) error) error {
+func (h *PaymentServiceHandler) underRefundLock(ctx context.Context, paymentID string, fn func(ctx, txCtx context.Context, locked *pb.LockPaymentForRefundResp) (bool, error)) error {
 	var locked *pb.LockPaymentForRefundResp
 	return h.inLockedTx(ctx, func(txCtx context.Context) error {
 		var err error
@@ -556,45 +567,72 @@ func (h *PaymentServiceHandler) underRefundLock(ctx context.Context, paymentID s
 			err = notFound("payment not found")
 		}
 		return err
-	}, func(txCtx context.Context) error {
-		return fn(txCtx, locked)
+	}, func(ctx, txCtx context.Context) (bool, error) {
+		return fn(ctx, txCtx, locked)
 	})
 }
 
 // inLockedTx runs fn inside a transaction that first takes a row lock
-// (lock), and ends it — the lock with it — when fn returns. fn makes its
-// writes on the CALLER's ctx, not txCtx: they commit on their own, so what it
-// records is visible to the next holder the moment the lock passes, and
-// something done at the provider is never rolled back with an error after
-// it. Nothing written under the lock may touch the locked row (another
-// connection would wait on this lock).
+// (lock), and ends it — the lock with it — when fn returns.
+//
+// fn gets two contexts. ctx is the caller's, cut off lockedWorkMargin before
+// the transaction's timeout: the provider calls and the writes that must
+// stand on their own (a top-up's credit taken back) use it, and the work ends
+// — the transaction with it, by this handler — before the coordinator could
+// roll it back under a provider call still in flight and free the lock while
+// what it guards is unrecorded. txCtx is the transaction's: the locked read,
+// the reads that must see what the previous holder recorded, and the ONE
+// record of the result (a Refund, a Subscription) use it.
+//
+// The record goes in the transaction because it names the locked row: its
+// foreign key is checked with FOR KEY SHARE on that row, which the FOR UPDATE
+// lock blocks for every other connection. Made on ctx it waited for this very
+// lock — until the transaction timed out (60 s), after which the refund was
+// unguarded and the commit failure only logged. In the transaction it is
+// checked on the lock holder's own connection, lands at once, and is visible
+// to the next holder the moment the lock passes, since both happen at the
+// commit. Nothing written on ctx under the lock may touch the locked row or
+// insert a child of it (another connection would wait on this lock).
+//
+// fn reports whether the transaction holds a write of its own (wrote). One
+// that does is committed, and a failed or unknown commit is returned as
+// Unavailable: what was done at the provider is then unrecorded, and the
+// caller's retry under the same key finds it there and records it. One that
+// does not is rolled back — an insert refused as a duplicate leaves the
+// transaction aborted, and the answer fn found in another writer's row stands.
 //
 // Refused without a transaction client: an unlocked check lets two callers
 // both pass it. ValidateConfig refuses such a bundle.
-func (h *PaymentServiceHandler) inLockedTx(ctx context.Context, lock, fn func(txCtx context.Context) error) error {
+func (h *PaymentServiceHandler) inLockedTx(ctx context.Context, lock func(txCtx context.Context) error, fn func(ctx, txCtx context.Context) (wrote bool, err error)) error {
 	if h.DistTx == nil {
 		return status.Error(codes.Internal, "payment: no transaction client is wired; refused rather than run unguarded")
 	}
-	tx, txCtx, err := distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{
+	work, cancel := context.WithTimeout(ctx, refundLockTimeout-lockedWorkMargin)
+	defer cancel()
+	tx, txCtx, err := distx.Begin(work, h.DistTx, &distxpb.BeginRequest{
 		ConnectionName: h.Connection,
 		TxTimeoutMs:    int32(refundLockTimeout / time.Millisecond),
 	})
 	if err != nil {
 		return err
 	}
+	wrote := false
 	err = lock(txCtx)
 	if err == nil {
-		err = fn(txCtx)
+		wrote, err = fn(work, txCtx)
 	}
 	end := context.WithoutCancel(ctx)
-	if err != nil {
-		_ = tx.Rollback(end)
+	if err != nil || !wrote {
+		if rerr := tx.Rollback(end); rerr != nil && err == nil {
+			// Nothing of this call's is in it; the lock waits for the
+			// transaction's timeout to pass.
+			slog.Warn("payment: releasing a row lock failed", "err", rerr)
+		}
 		return err
 	}
-	// The transaction wrote nothing; a failed commit only means the lock
-	// waits for the timeout to pass.
 	if cerr := tx.Commit(end); cerr != nil {
-		slog.Warn("payment: releasing a row lock failed", "err", cerr)
+		slog.Warn("payment: the record made under a row lock did not commit", "err", cerr)
+		return status.Error(codes.Unavailable, "payment: the provider acted but its local record did not commit; retry with the same idempotency_key")
 	}
 	return nil
 }
@@ -688,12 +726,17 @@ func refundCurrency(p *pb.Payment) string {
 // recordOwnRefund records a refund this call made (or found at the provider
 // under its key). fresh is false when the answer is a row another writer
 // recorded first — its follow-ups are that writer's.
-func (h *PaymentServiceHandler) recordOwnRefund(ctx context.Context, payment *pb.Payment, res backend.RefundResult, amount int64, storedKey string) (resp *pb.RefundPaymentResp, fresh bool, err error) {
+//
+// The row is inserted on writeCtx — the transaction holding the payment's row
+// lock when there is one (see inLockedTx), ctx otherwise; everything read or
+// written after a refused insert uses ctx, since a refused statement may have
+// ended the transaction's usefulness.
+func (h *PaymentServiceHandler) recordOwnRefund(ctx, writeCtx context.Context, payment *pb.Payment, res backend.RefundResult, amount int64, storedKey string) (resp *pb.RefundPaymentResp, fresh bool, err error) {
 	// The provider's answer is recorded, not assumed: a refund can be pending
 	// (and fail later), or fail at once. Only pending and succeeded refunds
 	// count toward REFUNDED (SumRefundsForPayment).
 	outcome := mapRefundStatus(res.Status)
-	created, err := h.Mutation.CreateRefund(ctx, &pb.CreateRefundReq{
+	created, err := h.Mutation.CreateRefund(writeCtx, &pb.CreateRefundReq{
 		PaymentId:        payment.GetId(),
 		ProviderRefundId: res.ProviderRefundID,
 		Amount:           amount,
