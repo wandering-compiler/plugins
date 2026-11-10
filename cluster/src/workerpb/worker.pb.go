@@ -382,7 +382,14 @@ type AttachReq struct {
 	// ready the instant it announced, and a machine that came up already
 	// draining or already wedged would be handed work for as long as it took its
 	// first status to arrive.
-	Readiness     WorkerStatus_Readiness `protobuf:"varint,4,opt,name=readiness,proto3,enum=w17.cluster.worker.WorkerStatus_Readiness" json:"readiness,omitempty"`
+	Readiness WorkerStatus_Readiness `protobuf:"varint,4,opt,name=readiness,proto3,enum=w17.cluster.worker.WorkerStatus_Readiness" json:"readiness,omitempty"`
+	// The engines this machine runs — opaque names the pool's user defines
+	// (ReserveTaskReq.engine), for a codegen pool the engine versions. A
+	// reservation naming an engine goes only to a worker that lists it.
+	//
+	// EMPTY means the worker predates engines, or runs one it does not name:
+	// it takes any reservation, exactly as before the field existed.
+	Engines       []string `protobuf:"bytes,5,rep,name=engines,proto3" json:"engines,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -443,6 +450,13 @@ func (x *AttachReq) GetReadiness() WorkerStatus_Readiness {
 		return x.Readiness
 	}
 	return WorkerStatus_READY
+}
+
+func (x *AttachReq) GetEngines() []string {
+	if x != nil {
+		return x.Engines
+	}
+	return nil
 }
 
 // WorkerStatus is a worker changing its mind about taking work.
@@ -648,12 +662,13 @@ const file_worker_proto_rawDesc = "" +
 	"\rWorkerMessage\x12;\n" +
 	"\bannounce\x18\x01 \x01(\v2\x1d.w17.cluster.worker.AttachReqH\x00R\bannounce\x12:\n" +
 	"\x06status\x18\x02 \x01(\v2 .w17.cluster.worker.WorkerStatusH\x00R\x06statusB\x05\n" +
-	"\x03msg\"\x9c\x01\n" +
+	"\x03msg\"\xb6\x01\n" +
 	"\tAttachReq\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x14\n" +
 	"\x05slots\x18\x03 \x01(\rR\x05slots\x12H\n" +
-	"\treadiness\x18\x04 \x01(\x0e2*.w17.cluster.worker.WorkerStatus.ReadinessR\treadiness\"\xa1\x01\n" +
+	"\treadiness\x18\x04 \x01(\x0e2*.w17.cluster.worker.WorkerStatus.ReadinessR\treadiness\x12\x18\n" +
+	"\aengines\x18\x05 \x03(\tR\aengines\"\xa1\x01\n" +
 	"\fWorkerStatus\x12H\n" +
 	"\treadiness\x18\x01 \x01(\x0e2*.w17.cluster.worker.WorkerStatus.ReadinessR\treadiness\x12\x12\n" +
 	"\x04note\x18\x02 \x01(\tR\x04note\"3\n" +

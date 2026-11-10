@@ -70,6 +70,15 @@ const (
 	// was banned and cut off). Retryable through a new placement.
 	WorkerLost = "WORKER_LOST"
 
+	// EngineNotCarried — a reservation names an engine no worker attached to
+	// this relay runs. A control plane falls through to another relay.
+	EngineNotCarried = "ENGINE_NOT_CARRIED"
+
+	// EngineMismatch — the call names another engine (the w17-cluster-engine
+	// header) than the reservation its ticket came from. The ticket is not
+	// spent; the answer is a new placement.
+	EngineMismatch = "ENGINE_MISMATCH"
+
 	// ReservationUnknown — a poll named a reservation the relay does not
 	// hold: abandoned (not polled in time), cancelled, redeemed, expired, or
 	// lost in a restart. Deliberately one reason for all of them, as with
