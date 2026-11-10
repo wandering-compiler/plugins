@@ -29,7 +29,7 @@ env:
   - name: two_factor_totp
     type: bool
     default: "true"
-    description: "Built-in TOTP second factor (two_factor feature). false = the plugin never verifies TOTP; every challenge goes out via MfaChallengeRequested for a hand-written delivery channel (SMS/e-mail)."
+    description: "Built-in TOTP second factor (two_factor feature). false = the plugin never verifies TOTP; every challenge goes out via MfaChallengeRequested for a hand-written delivery channel (SMS/e-mail). With false and two_factor_policy required, that channel is the ONLY way any account signs in: deploy a subscriber that delivers the code before switching it on (the boot cannot check that one exists)."
   - name: two_factor_policy
     type: string
     default: required
