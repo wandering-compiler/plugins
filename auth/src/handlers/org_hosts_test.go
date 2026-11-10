@@ -28,6 +28,7 @@ type hostMock struct {
 	joined      []string                            // AddOrgMembership: user/org/kind/role
 	granted     []string                            // AssignRoleToUser: user/org/role id
 	policySet   []string                            // SetOrgSignUpPolicyRow: org/kind/open/role
+	policySnap  []string                            // SetOrgSignUpPolicyRow: the role snapshot stored
 	policyEnded []string                            // EndOrgSignUpPolicyRow: org/kind
 	roleGrants  []*pb.RoleGrant                     // ListRoleGrants: what each role carries (the ceiling)
 }

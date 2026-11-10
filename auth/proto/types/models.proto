@@ -2279,6 +2279,22 @@ message OrgSignUpPolicy {
     (w17.field) = { type: TEXT, blank: true, default_string: "" },
     (w17.contrib.plugin_feature_field) = "product_roles"
   ];
+
+  // role_snapshot — the role as the operator setting an open policy was
+  // allowed to hand it out, in OrgInvite.role_snapshot's form
+  // (`<role id>:<permission ids, sorted, comma-separated>`, or `<role id>:*`
+  // for a wildcard). Written by SetOrgSignUpPolicy from the role ceiling
+  // (handlers/role_ceiling.go) and checked at every registration the policy
+  // admits, because the grant is written THEN, against a catalogue that may
+  // have moved in between: a role widened since the policy was set, or a
+  // different role now answering to the name, would otherwise hand out
+  // permissions the operator never held.
+  //
+  // Empty on a closed policy, and on an open one set before the column
+  // existed — the default only fills those rows. An open policy with an empty
+  // snapshot is refused at registration: it was never checked, and the
+  // operator sets it again.
+  string role_snapshot = 12 [(w17.field) = { type: TEXT, blank: true, default_string: "" }];
 }
 
 // OrgTwoFactorPolicy — whether an organization's people sign in with a second
