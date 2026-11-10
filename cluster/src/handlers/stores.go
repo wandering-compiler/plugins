@@ -182,6 +182,20 @@ func pastNewestDecision(newest time.Time) time.Time {
 		Add(time.Millisecond + time.Duration(rand.IntN(1000))*time.Microsecond)
 }
 
+func (s workerRegistry) Exists(ctx context.Context, id string) (bool, error) {
+	w, err := s.q.GetWorker(ctx, &pb.GetWorkerReq{Id: id})
+	switch status.Code(err) {
+	case codes.OK:
+		// An empty row is a single-row read that matched nothing (see
+		// relayStore.Get).
+		return w.GetId() != "", nil
+	case codes.NotFound, codes.InvalidArgument:
+		// InvalidArgument: not a well-formed id, so no row has it.
+		return false, nil
+	}
+	return false, err
+}
+
 func (s workerRegistry) EnrolledCount(ctx context.Context) (int, error) {
 	resp, err := s.q.CountWorkersByState(ctx, &pb.CountWorkersByStateReq{
 		State: pb.WorkerState_WORKER_STATE_ENROLLED,

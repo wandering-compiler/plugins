@@ -45,6 +45,26 @@ type tablesServer struct {
 	// duringSet runs inside FingerprintsByState: a decision landing between
 	// Banned's reads.
 	duringSet func(s *tablesServer)
+	// workerIDs are the worker rows GetWorker finds.
+	workerIDs map[string]bool
+}
+
+func (s *tablesServer) GetWorker(_ context.Context, in *pb.GetWorkerReq) (*pb.Worker, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fail != nil {
+		return nil, s.fail
+	}
+	if in.GetId() == "not-a-uuid" {
+		return nil, status.Error(codes.InvalidArgument, "id: not a UUID")
+	}
+	if !s.workerIDs[in.GetId()] {
+		if s.emptyRow {
+			return &pb.Worker{}, nil
+		}
+		return nil, status.Error(codes.NotFound, "no row")
+	}
+	return &pb.Worker{Id: in.GetId()}, nil
 }
 
 func (s *tablesServer) ListRelays(_ context.Context, in *pb.ListRelaysReq) (*pb.ListRelaysResp, error) {
@@ -335,6 +355,27 @@ func TestWorkerStore_LaggingDecisionsDoNotShareAVersion(t *testing.T) {
 	}
 	if len(seen) < 2 {
 		t.Errorf("20 decisions behind the same newest one all recorded %v — lagging replicas would share a version", seen)
+	}
+}
+
+// Exists reads the row: found is true; NotFound, an empty row and an id that
+// is not even well-formed are all "no such worker"; any other failure is an
+// error, never "absent".
+func TestWorkerStore_ExistsReadsTheRow(t *testing.T) {
+	tb := &tablesServer{workerIDs: map[string]bool{"w-1": true}}
+	_, workers := serveTables(t, tb)
+	for id, want := range map[string]bool{"w-1": true, "w-2": false, "not-a-uuid": false} {
+		if got, err := workers.Exists(t.Context(), id); err != nil || got != want {
+			t.Errorf("Exists(%q) = %v, %v; want %v", id, got, err, want)
+		}
+	}
+	tb.emptyRow = true
+	if got, err := workers.Exists(t.Context(), "w-2"); err != nil || got {
+		t.Errorf("an empty row: %v, %v; want absent", got, err)
+	}
+	tb.fail = status.Error(codes.Unavailable, "db down")
+	if _, err := workers.Exists(t.Context(), "w-1"); err == nil {
+		t.Error("a failed read was reported as an answer")
 	}
 }
 

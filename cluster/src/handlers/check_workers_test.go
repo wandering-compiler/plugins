@@ -29,6 +29,19 @@ type workerStore struct {
 	// versionCalls counts BanVersion reads.
 	versionCalls int
 	decisions    []decision
+	// missing are ids Exists reports absent; every other id exists.
+	missing map[string]bool
+	// existsErr fails every Exists.
+	existsErr error
+}
+
+func (w *workerStore) Exists(_ context.Context, id string) (bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.existsErr != nil {
+		return false, w.existsErr
+	}
+	return !w.missing[id], nil
 }
 
 type decision struct {

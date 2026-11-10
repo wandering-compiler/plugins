@@ -709,6 +709,27 @@ func TestDecideWorkers_EmptySelectionAndRefusedDecision(t *testing.T) {
 	}
 }
 
+// A selection with an id the registry does not hold decides NOTHING and says
+// which id: the UPDATE matched no row for it, and the operator was told the
+// whole selection was banned. Every id is resolved before the write, so a
+// stale id among good ones bans none of them; a registry that cannot be read
+// refuses the decision too.
+func TestDecideWorkers_AStaleIDDecidesNothing(t *testing.T) {
+	ws := &workerStore{missing: map[string]bool{"w-gone": true}}
+	h := &ClusterServiceHandler{Workers: ws}
+	_, err := h.BanWorkers(signedIn("op-1"), &pb.DecideWorkersActionReq{Ids: []string{"w-1", "w-gone", "w-2"}})
+	if status.Code(err) != codes.NotFound || !strings.Contains(err.Error(), `"w-gone"`) {
+		t.Fatalf("a stale id: %v, want NotFound naming it", err)
+	}
+	if len(ws.decisions) != 0 {
+		t.Errorf("decided %+v with a stale id in the selection", ws.decisions)
+	}
+	ws.existsErr = status.Error(codes.Unavailable, "db down")
+	if _, err := h.UnbanWorkers(signedIn("op-1"), &pb.DecideWorkersActionReq{Ids: []string{"w-1"}}); status.Code(err) != codes.Unavailable || len(ws.decisions) != 0 {
+		t.Errorf("an unreadable registry: %v (decisions %+v), want Unavailable and nothing decided", err, ws.decisions)
+	}
+}
+
 // The control plane does not pretend to be a relay: the two relay-only methods
 // say where they are answered instead of answering for a side they are not.
 func TestHandlers_RelayOnlyMethodsAreUnimplemented(t *testing.T) {

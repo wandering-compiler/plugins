@@ -37,6 +37,10 @@ type WorkerStore interface {
 	// Decide bans (ban) or unbans the workers with these registry ids,
 	// recording who decided and when.
 	Decide(ctx context.Context, ids []string, ban bool, by string) error
+	// Exists reports whether the registry holds a worker with this id.
+	// Worker rows are never deleted, so an id found here is still there when
+	// the decision is written.
+	Exists(ctx context.Context, id string) (bool, error)
 }
 
 // withBans puts the ban set on ctx, for every relay call made under it: the
