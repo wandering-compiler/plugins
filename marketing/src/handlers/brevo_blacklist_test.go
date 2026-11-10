@@ -16,6 +16,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
+
 	pb "github.com/wandering-compiler/plugins/marketing/gen/pb"
 	"github.com/wandering-compiler/plugins/marketing/lib/brevo"
 )
@@ -739,5 +741,30 @@ func TestIngestBrevo_AFutureUnsubscribeIsDatedNow(t *testing.T) {
 	}
 	if len(h.got) != 1 || strings.HasSuffix(h.got[0], "2030-01-01T00:00:00Z") {
 		t.Errorf("the hook was handed %v, want a withdrawal dated now", h.got)
+	}
+}
+
+// An UNAVAILABLE answered before the delivery wrote anything — the lookup of
+// the first address failing — is marked replay-safe, so a w17 client sends
+// it again (the SDK replays a handler's UNAVAILABLE only when so marked). One
+// answered after an unsubscribe of the delivery was recorded, or after the
+// hook was called, is not.
+func TestIngestBrevo_OnlyAnUnavailableBeforeAnyWriteIsReplaySafe(t *testing.T) {
+	down := status.Error(codes.Unavailable, "database unavailable")
+	l := &ledger{contacts: map[string]*pb.ContactRow{"u1": {UserId: "u1", Email: "a@x.example"}},
+		byEmailErr: map[string]error{"z@x.example": down}}
+	w := webhook(t, l, "s3cret", &hookCalls{})
+	_, err := w.IngestBrevo(withToken("s3cret"), &pb.IngestBrevoReq{RawPayload: []byte(`{"event":"unsubscribe","email":"z@x.example"}`)})
+	if status.Code(err) != codes.Unavailable || !grpcerr.IsReplaySafe(err) {
+		t.Errorf("the lookup failing first: %v (replay-safe %v), want a replay-safe Unavailable", err, grpcerr.IsReplaySafe(err))
+	}
+	_, err = w.IngestBrevo(withToken("s3cret"), &pb.IngestBrevoReq{RawPayload: []byte(`[` + unsubscribe + `,{"event":"unsubscribe","email":"z@x.example"}]`)})
+	if status.Code(err) != codes.Unavailable || grpcerr.IsReplaySafe(err) {
+		t.Errorf("the lookup failing after a write: %v (replay-safe %v), want an Unavailable NOT marked replay-safe", err, grpcerr.IsReplaySafe(err))
+	}
+	failing := webhook(t, &ledger{contacts: map[string]*pb.ContactRow{"u1": {UserId: "u1", Email: "a@x.example"}}}, "s3cret", &hookCalls{err: errors.New("unreachable")})
+	_, err = failing.IngestBrevo(withToken("s3cret"), &pb.IngestBrevoReq{RawPayload: []byte(unsubscribe)})
+	if status.Code(err) != codes.Unavailable || grpcerr.IsReplaySafe(err) {
+		t.Errorf("a failed hook: %v (replay-safe %v), want an Unavailable NOT marked replay-safe", err, grpcerr.IsReplaySafe(err))
 	}
 }

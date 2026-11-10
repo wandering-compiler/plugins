@@ -15,6 +15,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
+
 	"github.com/wandering-compiler/plugins/marketing/gen"
 	pb "github.com/wandering-compiler/plugins/marketing/gen/pb"
 )
@@ -115,7 +117,9 @@ func (w *brevoWebhook) IngestBrevo(ctx context.Context, req *pb.IngestBrevoReq) 
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "marketing plugin: a Brevo webhook body that does not parse: %v", err)
 	}
-	n := 0
+	// wrote: an unsubscribe of this delivery was handled (recorded, maybe
+	// handed to the hook). Until then an UNAVAILABLE is replay-safe.
+	n, wrote := 0, false
 	for _, ev := range events {
 		if ev.Event != "unsubscribe" && ev.Event != "unsubscribed" {
 			continue
@@ -131,13 +135,20 @@ func (w *brevoWebhook) IngestBrevo(ctx context.Context, req *pb.IngestBrevoReq) 
 			continue
 		}
 		if err != nil {
-			return nil, status.Errorf(codes.Unavailable, "marketing plugin: finding the user of an unsubscribed address: %v", err)
+			err = status.Errorf(codes.Unavailable, "marketing plugin: finding the user of an unsubscribed address: %v", err)
+			if !wrote {
+				// Nothing of this delivery was written: a w17 client may send
+				// it again (grpcerr.ReplaySafe).
+				err = grpcerr.ReplaySafe(err)
+			}
+			return nil, err
 		}
 		if len(got.GetContacts()) == 0 {
 			log.Printf("marketing plugin: Brevo unsubscribed an address no user of the plugin has; nothing to write back")
 			continue
 		}
 		for _, r := range got.GetContacts() {
+			wrote = true
 			done, err := w.withdraw(ctx, r, ev.at())
 			if err != nil {
 				return nil, status.Error(codes.Unavailable, err.Error())

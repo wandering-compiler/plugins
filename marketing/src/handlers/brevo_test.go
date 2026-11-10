@@ -241,6 +241,8 @@ type ledger struct {
 	beforeConsentWrite func()
 	// recordFails: how many more times recording each sent id fails.
 	recordFails map[string]int
+	// byEmailErr: what ListContactsByEmail answers for an address.
+	byEmailErr map[string]error
 }
 
 func (l *ledger) RecordActivity(_ context.Context, in *pb.ActivityReq, _ ...grpc.CallOption) (*pb.ActivityWriteResp, error) {
@@ -348,6 +350,9 @@ func (l *ledger) ListContacts(_ context.Context, in *pb.ListContactsReq, _ ...gr
 func (l *ledger) ListContactsByEmail(_ context.Context, in *pb.ListContactsByEmailReq, _ ...grpc.CallOption) (*pb.ListContactsResp, error) {
 	if in.GetEmail() == l.badEmail {
 		return nil, status.Error(codes.InvalidArgument, "email: not an address")
+	}
+	if err := l.byEmailErr[in.GetEmail()]; err != nil {
+		return nil, err
 	}
 	out := &pb.ListContactsResp{}
 	for _, c := range l.contacts {
