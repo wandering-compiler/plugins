@@ -726,7 +726,13 @@ func (h *PaymentServiceHandler) refundAllowed(ctx, txCtx context.Context, paymen
 		if obj.Status != "succeeded" {
 			return 0, status.Errorf(codes.FailedPrecondition, "payment %s has not succeeded at the provider (%s); it cannot be refunded yet", payment.GetId(), obj.Status)
 		}
-		if r := obj.Received; r.Currency != "" && (!strings.EqualFold(r.Currency, currency) || r.Amount != took) {
+		// A success nobody can check is not trusted, as on the webhook path
+		// (holdAmountMismatch): without what it took, it could have taken
+		// another amount, and the refund would be judged against a guess.
+		if obj.Received.Currency == "" {
+			return 0, status.Errorf(codes.FailedPrecondition, "payment %s: the provider reported no received amount; it cannot be refunded until its webhook has arrived", payment.GetId())
+		}
+		if r := obj.Received; !strings.EqualFold(r.Currency, currency) || r.Amount != took {
 			return 0, status.Errorf(codes.FailedPrecondition, "payment %s took %s %s at the provider, not the %s %s asked; it is being held — retry once its webhook has arrived",
 				payment.GetId(), fmtAmount(r.Amount), r.Currency, fmtAmount(took), currency)
 		}

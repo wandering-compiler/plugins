@@ -51,6 +51,9 @@ type stripeFake struct {
 	failQueue []int
 	requests  map[string]int    // path → requests that reached the handler logic
 	subStatus string            // status a created subscription reports ("" = active)
+	// silentReceived answers intents without amount_received — a driver or
+	// mock answering the pinned shape without the field.
+	silentReceived bool
 	origins   map[string]string // object id → metadata[w17_payment] it was created with
 	installs  map[string]string // object id → metadata[w17_install] it was created with
 	refunds   []*fakeRefund     // in creation order
@@ -647,6 +650,9 @@ func (f *stripeFake) intentObjects() map[string]map[string]any {
 		out[id] = map[string]any{"id": id, "object": "payment_intent", "status": in.status, "amount": in.amount,
 			"currency": in.currency, "customer": in.customer, "description": in.description,
 			"metadata": f.marksOf(id), "last_payment_error": lastErr, "amount_received": in.amount}
+		if f.silentReceived {
+			delete(out[id], "amount_received")
+		}
 	}
 	return out
 }

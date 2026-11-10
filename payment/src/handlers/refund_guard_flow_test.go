@@ -439,3 +439,22 @@ func TestFlow_AFullRefundAfterAPartialOneRefundsTheRest(t *testing.T) {
 	}
 	wantNoLocksLeft(t, r)
 }
+
+// A success nobody can check is not trusted (stripe_webhooks/success-checked-
+// against-the-row): a payment whose webhook has not arrived, which the
+// provider reports succeeded WITHOUT what it took, is not refunded — the
+// webhook path refuses the same success, and redelivers.
+func TestFlow_RefundBeforeTheWebhook_OfAnUncheckableSuccessIsRefused(t *testing.T) {
+	r := erringRig(t)
+	p := r.charge("user-a", 100000, "k") // locally REQUIRES_ACTION
+	r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
+	r.stripe.mu.Lock()
+	r.stripe.silentReceived = true
+	r.stripe.mu.Unlock()
+	_, err := refund(r, p.GetId(), 0, "r1")
+	wantCode(t, err, codes.FailedPrecondition, "a refund of a success the provider reports without amount_received")
+	if n := r.stripe.count("/v1/refunds"); n != 0 {
+		t.Errorf("an uncheckable success was refunded at the provider (%d calls)", n)
+	}
+	wantNoLocksLeft(t, r)
+}
