@@ -629,14 +629,27 @@ func orDefault(s, def string) string {
 // address, which it links when both sides verified the address. "" with no
 // error means no account exists: OAuthExchange creates one, with the
 // invitation the page passes there.
+//
+// Only NotFound (or an empty answer) means "no row". Any other failure of
+// either read is returned: a store that could not say whether the subject is
+// linked must not be read as "not linked", or the exchange matches the
+// asserted address to another account and links the subject there, or goes
+// on to create an account for an address that has one (oauth/outage-is-not-no-row).
 func (h *AuthServiceHandler) findOAuthAccount(ctx context.Context, providerID, subject, email string, emailVerified bool) (string, error) {
-	if ident, err := h.Query.GetOAuthIdentity(ctx, &pb.GetOAuthIdentityReq{ProviderId: providerID, ExternalId: subject}); err == nil && ident.GetIdentity() != nil {
+	ident, err := h.Query.GetOAuthIdentity(ctx, &pb.GetOAuthIdentityReq{ProviderId: providerID, ExternalId: subject})
+	if err := notFoundOK(err); err != nil {
+		return "", err
+	}
+	if err == nil && ident.GetIdentity() != nil {
 		return ident.GetIdentity().GetUserId(), nil
 	}
 	// Canonicalise so the IdP-asserted email matches a password-signup
 	// account (and a later password signin) regardless of case.
 	email = normalizeEmail(email)
 	u, err := h.Query.GetUserByEmail(ctx, &pb.GetUserByEmailReq{Email: email})
+	if err := notFoundOK(err); err != nil {
+		return "", err
+	}
 	if err != nil || u.GetUser() == nil || u.GetUser().GetId() == "" {
 		return "", nil
 	}
