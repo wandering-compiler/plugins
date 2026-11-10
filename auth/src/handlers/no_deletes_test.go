@@ -858,7 +858,7 @@ func TestDeleteRoleKeepsAPresetsKey(t *testing.T) {
 	if !strings.Contains(body, "UPDATE @module.Role SET deleted_at = NOW(), ended_key = id WHERE id = :role_id AND deleted_at IS NULL RETURNING id AS role_id") {
 		t.Errorf("DeleteRole does not stamp deleted_at and ended_key on any live role:\n%s", body)
 	}
-	for _, banned := range []string{"preset_key = NULL", "preset_key IS NULL", "preset_key IS NOT NULL", "on_present"} {
+	for _, banned := range []string{"preset_key = NULL", "preset_key IS NULL", "preset_key IS NOT NULL"} {
 		if strings.Contains(body, banned) {
 			t.Errorf("DeleteRole treats a preset differently (%q):\n%s", banned, body)
 		}
@@ -869,6 +869,47 @@ func TestDeleteRoleKeepsAPresetsKey(t *testing.T) {
 	role := models[i : i+strings.Index(models[i:], "\n}\n")]
 	if !strings.Contains(role, `string preset_key = 9 [(w17.field) = { type: SLUG, max_len: 100, null: true, unique: true }];`) {
 		t.Errorf("Role.preset_key is no longer the seed's unique upsert key:\n%s", role)
+	}
+}
+
+// rbac/no-admin-lockout-by-role-deletion: the admin Roles page binds
+// DeleteRole directly, so the guard lives in the statement. Retiring a live
+// wildcard role is refused (LAST_ADMIN_ROLE, FailedPrecondition) while one of
+// its live holders holds no live grant of another live wildcard role — the
+// retirement would revoke the last administrator grant that account has, and
+// for the realm's last administrator nothing in the product could give it
+// back. Every live wildcard row is locked first, so two retirements of two
+// wildcards run one after the other and the second sees the first; the guard
+// runs before any write, so a refusal revokes nothing. Ran against
+// PostgreSQL (SPEC: "How to prove it").
+func TestDeleteRole_AWildcardsLastHolderIsNotStranded(t *testing.T) {
+	body := rpcBodies(dqlText(authProtos(t)["mutations/auth_mutation.proto"]))["DeleteRole"]
+	const (
+		lock  = `dql:  "UPDATE @module.Role SET id = id WHERE all_permissions = TRUE AND deleted_at IS NULL"`
+		guard = `"SELECT h.id AS id FROM @module.UserRole h JOIN @module.Role r ON r.id = h.role_id ` +
+			`WHERE h.role_id = :role_id AND h.revoked_at IS NULL AND r.all_permissions = TRUE AND r.deleted_at IS NULL ` +
+			`AND NOT EXISTS (SELECT o.id FROM @module.UserRole o JOIN @module.Role w ON w.id = o.role_id ` +
+			`WHERE o.user_id = h.user_id AND o.role_id <> :role_id AND o.revoked_at IS NULL ` +
+			`AND w.all_permissions = TRUE AND w.deleted_at IS NULL) LIMIT 1"`
+		revoke = "UPDATE @module.UserRole SET revoked_at = NOW()"
+	)
+	at := map[string]int{}
+	for name, want := range map[string]string{"lock": lock, "guard": guard, "revoke": revoke} {
+		at[name] = strings.Index(body, want)
+		if at[name] < 0 {
+			t.Errorf("DeleteRole lacks its %s op %s:\n%s", name, want, body)
+		}
+	}
+	if t.Failed() {
+		return
+	}
+	if !(at["lock"] < at["guard"] && at["guard"] < at["revoke"]) {
+		t.Errorf("DeleteRole must lock the wildcards, then guard, then revoke: %v\n%s", at, body)
+	}
+	for _, want := range []string{"on_present: {", "code:       ON_PRESENT_FAILED_PRECONDITION", `error_code: "LAST_ADMIN_ROLE"`} {
+		if i := strings.Index(body[at["guard"]:], want); i < 0 || at["guard"]+i > at["revoke"] {
+			t.Errorf("DeleteRole's guard does not answer %s:\n%s", want, body)
+		}
 	}
 }
 
