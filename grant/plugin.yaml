@@ -1,6 +1,6 @@
 name: grant
 version: 0.1.0-rc.5
-requires_w17: ">=1.15"
+requires_w17: ">=1.18"
 
 # Explicit Go module anchor — staging text-rewrites this prefix in
 # src/handlers/ + src/lib/ + plugin.go to the per-activation pb path.
@@ -43,8 +43,9 @@ presets:
           - { ref: GrantService.ApproveEnvelope,       method: POST,   path: "/envelopes/{id}/approve" }
           - { ref: GrantService.RejectEnvelope,        method: POST,   path: "/envelopes/{id}/reject" }
       # Anyone's: the approved envelope. Read before sign-in (an invitation,
-      # a co-brand sign-in page), so unauthenticated and limited per address.
+      # a co-brand sign-in page), so unauthenticated; not limited per address,
+      # because every such page reads it and the envelope is public by intent.
       - prefix: /grant/envelopes
         description: "The approved envelope of an organization — public."
         endpoints:
-          - { ref: GrantService.GetOrgEnvelope,  method: GET, path: "/orgs/{org_id}", exclude_auth: true, public_limit: every_request }
+          - { ref: GrantService.GetOrgEnvelope,  method: GET, path: "/orgs/{org_id}", exclude_auth: true, public_limit: none }
