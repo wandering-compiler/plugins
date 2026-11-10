@@ -181,6 +181,12 @@ func TestActivityAttr(t *testing.T) {
 			t.Errorf("activityAttr(%q) = %q, want %q", in, got, want)
 		}
 	}
+	// The name stays within the 255 characters the SPEC promises (Gap 6),
+	// prefix included: eventName alone is cut at 255.
+	long := "/a.b.Svc/" + strings.Repeat("M", 300)
+	if got := activityAttr(long); len(got) != 255 || !strings.HasPrefix(got, "W17_SVC_MMM") {
+		t.Errorf("activityAttr of a %d-character method = %d characters (%q…), want 255", len(long), len(got), got[:12])
+	}
 }
 
 // brevo/dated-contact: the contact carries the day the account was created.

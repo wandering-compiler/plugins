@@ -81,7 +81,7 @@ func (h *PaymentServiceHandler) IngestStripe(ctx context.Context, req *pb.Ingest
 
 	// Processed in full already: nothing left to do (see above).
 	if seen, err := h.Query.GetProcessedWebhookEvent(ctx, &pb.GetProcessedWebhookEventReq{ProviderEventId: ev.ID}); err != nil && !absent(err) {
-		return nil, err
+		return nil, beforeAnyEffect(err)
 	} else if seen.GetEvent() != nil {
 		return &pb.IngestStripeResp{Handled: false, EventId: ev.ID, EventType: ev.Type}, nil
 	}

@@ -103,6 +103,9 @@ func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.Cl
 	attributes := gen.FeatureBrevoAttributes && writeActivity != nil
 	events := sendsEvents(gen.FeatureBrevoEvents, attributes)
 	t := &brevoTool{client: client, sel: sel, consentAttr: attr, events: events, attributes: attributes, query: clients.MarketingQuery(), mutation: clients.MarketingMutation()}
+	// Before anything is subscribed: the attributes the auth events write
+	// exist when the first of them is handled (prepareAttributes).
+	stopAttrs := t.prepareAttributes(fixedAttributesWithin, time.Minute)
 	if err := registry.RegisterMarketingConsumer("brevo", t); err != nil {
 		return err
 	}
@@ -122,7 +125,6 @@ func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.Cl
 		}
 	}
 	stopForget := t.forgetPeriodically(time.Hour)
-	stopAttrs := t.ensureAttributes(time.Minute)
 	stopReconcile := t.reconcileInBackground(time.Minute)
 	registry.RegisterShutdown(func(context.Context) error { stopForget(); stopAttrs(); stopReconcile(); return nil })
 	return nil
@@ -134,13 +136,54 @@ func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.Cl
 // brevo_attributes is how events are turned off.
 func sendsEvents(events, attributes bool) bool { return events || !attributes }
 
+// fixedAttributes are the contact attributes the auth events write: the
+// consent and its date, and the sign-up date.
+func (t *brevoTool) fixedAttributes() []attributeDef {
+	return []attributeDef{{t.consentAttr, "boolean"}, {consentAtAttr, "date"}, {signedUpAttr, "date"}}
+}
+
 // contactAttributes are the contact attributes the plugin writes.
 func (t *brevoTool) contactAttributes() []attributeDef {
-	out := []attributeDef{{t.consentAttr, "boolean"}, {consentAtAttr, "date"}, {signedUpAttr, "date"}}
+	out := t.fixedAttributes()
 	if t.attributes {
 		out = append(out, activityAttributes(t)...)
 	}
 	return out
+}
+
+// fixedAttributesWithin bounds how long the boot waits for the fixed
+// attributes (prepareAttributes).
+var fixedAttributesWithin = 5 * time.Second
+
+// prepareAttributes creates the fixed attributes now, waiting at most within,
+// and leaves the rest — the activity attributes, and a fixed one Brevo did not
+// create in time — to ensureAttributesOf, every interval.
+//
+// Brevo drops an attribute the account does not have, silently, and
+// W17_SIGNED_UP_AT is written once, by UserCreated: created in the
+// background, a sign-up handled before it existed (the first moments of a
+// fresh account or stub) lost its date for good. The consent date heals on
+// the next decision, the activity dates on the next request; created before
+// the subscriptions, none is lost while Brevo answers. The bound keeps a
+// Brevo that does not answer from holding up the boot for longer.
+func (t *brevoTool) prepareAttributes(within, every time.Duration) (stop func()) {
+	ctx, cancel := context.WithTimeout(context.Background(), within)
+	var left []attributeDef
+	for _, a := range t.fixedAttributes() {
+		if ctx.Err() != nil {
+			left = append(left, a)
+			continue
+		}
+		if err := t.client.EnsureAttribute(ctx, a.name, a.typ); err != nil {
+			log.Printf("marketing plugin: creating the Brevo contact attribute %s: %v", a.name, err)
+			left = append(left, a)
+		}
+	}
+	cancel()
+	if t.attributes {
+		left = append(left, activityAttributes(t)...)
+	}
+	return t.ensureAttributesOf(every, left)
 }
 
 // ensureAttributes creates the contact attributes the plugin writes, in the
@@ -148,9 +191,16 @@ func (t *brevoTool) contactAttributes() []attributeDef {
 // Brevo drops it from every write silently, and the bundle's boot must not
 // wait on Brevo being reachable. One created is not asked for again.
 func (t *brevoTool) ensureAttributes(every time.Duration) (stop func()) {
+	return t.ensureAttributesOf(every, t.contactAttributes())
+}
+
+// ensureAttributesOf is ensureAttributes for the attributes todo.
+func (t *brevoTool) ensureAttributesOf(every time.Duration, todo []attributeDef) (stop func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		todo := t.contactAttributes()
+		if len(todo) == 0 {
+			return
+		}
 		for {
 			var left []attributeDef
 			for _, a := range todo {

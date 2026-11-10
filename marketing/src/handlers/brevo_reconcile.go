@@ -218,6 +218,12 @@ func (t *brevoTool) blacklistWithoutConsent(ctx context.Context, page []brevo.Co
 		} else if consented(c.Attributes[t.consentAttr]) {
 			continue
 		}
+		// State first, as every blacklisting write: a consent handler that
+		// reads Brevo meanwhile must not take this write for a person's
+		// unsubscribe.
+		if err := t.recordSentBlacklisted(ctx, c.ExtID, true); err != nil {
+			return n, err
+		}
 		err := t.client.UpdateContact(ctx, c.ExtID, nil, &yes)
 		if brevo.Refused(err) || brevo.IsNotFound(err) {
 			log.Printf("marketing plugin: Brevo refused to blacklist the contact of user %s: %v", c.ExtID, err)
@@ -226,10 +232,23 @@ func (t *brevoTool) blacklistWithoutConsent(ctx context.Context, page []brevo.Co
 		if err != nil {
 			return n, fmt.Errorf("blacklisting the contact of user %s: %w", c.ExtID, err)
 		}
-		if err := t.recordSentBlacklisted(ctx, c.ExtID, true); err != nil {
+		n++
+		// A yes handled between the read of the rows above and this write
+		// subscribed the contact, and this write blacklisted it again; its
+		// own re-read cannot see a write that came after it. The row as
+		// stored now decides: holding the newest yes, the contact is
+		// subscribed on it — the blacklist Brevo holds is this pass's own.
+		now, err := t.loadContact(ctx, c.ExtID)
+		if err != nil {
 			return n, err
 		}
-		n++
+		if now.erasedAt != nil || now.blacklisted() {
+			continue
+		}
+		if err := t.contactCall(ctx, "subscribe again after the reconciliation", c.ExtID,
+			t.subscribe(ctx, c.ExtID, t.consentAttrs(now), now, *now.consentAt, true)); err != nil {
+			return n, err
+		}
 	}
 	return n, nil
 }

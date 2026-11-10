@@ -146,7 +146,7 @@ func (h *PaymentServiceHandler) callerCustomerID(ctx context.Context) (string, e
 		if absent(err) {
 			return "", notFound(errNotYours)
 		}
-		return "", err
+		return "", beforeAnyEffect(err) // a read of the GetMy* reads, before anything
 	}
 	if id := got.GetCustomer().GetId(); id != "" {
 		return id, nil
@@ -178,7 +178,7 @@ func (h *PaymentServiceHandler) GetMyPayment(ctx context.Context, req *pb.GetMyP
 	}
 	got, err := h.Query.GetPayment(ctx, &pb.GetPaymentReq{Id: req.GetId()})
 	if err := ownRow(err, got.GetPayment().GetCustomerId(), customer); err != nil {
-		return nil, err
+		return nil, beforeAnyEffect(err)
 	}
 	return got, nil
 }

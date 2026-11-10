@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,8 @@ import (
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 	"github.com/wandering-compiler/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 )
 
 // The refund guard (base/refund-within-captured, base/refund-only-succeeded)
@@ -70,9 +73,6 @@ func TestFlow_RefundPastWhatRemains_IsRefusedBeforeTheProvider(t *testing.T) {
 	if !strings.Contains(err.Error(), "4.0000 of 10.0000 usd") {
 		t.Errorf("the refusal does not say what remains: %v", err)
 	}
-	// A full refund (no amount) is the whole payment, and only 4 remain.
-	_, err = refund(r, p.GetId(), 0, "r3")
-	wantCode(t, err, codes.InvalidArgument, "a full refund after a partial one")
 	if n := r.stripe.count("/v1/refunds"); n != before {
 		t.Errorf("a refused refund reached the provider (%d → %d)", before, n)
 	}
@@ -361,4 +361,130 @@ func TestFlow_ConcurrentTopUpRefunds_TheSecondSeesTheFirstsTakeBack(t *testing.T
 		t.Errorf("balance = %d, want 1.0000 (10 granted, 4 spent, 5 refunded)", got)
 	}
 	wantNoLocksLeft(t, r)
+}
+
+// The guards under a row lock read what the previous holder committed AFTER
+// the lock is granted (the refunded sum, the open subscription). That holds
+// only under READ COMMITTED: under REPEATABLE READ the snapshot is taken by
+// the lock statement before it waits, and the sum misses the refund the
+// previous holder recorded. A connection's default isolation is the
+// project's setting, so every transaction the plugin opens asks for READ
+// COMMITTED itself.
+func TestInLockedTx_AsksForReadCommitted(t *testing.T) {
+	r := subRig(t)
+	p := r.paid("user-a", 100000, "k")
+	if _, err := refund(r, p.GetId(), 10000, "r1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := subscribe(r, "pro", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	d := r.h.DistTx.(*fakeDistTx)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.isolations) < 2 {
+		t.Fatalf("%d transactions begun, want one per refund and per subscribe", len(d.isolations))
+	}
+	for i, iso := range d.isolations {
+		if iso != distxpb.Isolation_READ_COMMITTED {
+			t.Errorf("transaction %d asked for %v, want READ_COMMITTED", i, iso)
+		}
+	}
+}
+
+// amount = 0 refunds what remains, as the provider's own refund without an
+// amount does: after a partial refund it is the rest, not the whole payment
+// (which used to be refused as exceeding what remains). Resolved under the
+// payment's lock; a retry under its key is answered with that refund; once
+// nothing remains it is refused before the provider.
+func TestFlow_AFullRefundAfterAPartialOneRefundsTheRest(t *testing.T) {
+	r := erringRig(t)
+	p := r.paid("user-a", 100000, "k")
+	if _, err := refund(r, p.GetId(), 30000, "r1"); err != nil {
+		t.Fatal(err)
+	}
+	rest, err := refund(r, p.GetId(), 0, "r2")
+	if err != nil {
+		t.Fatalf("refund of the rest after a partial one: %v", err)
+	}
+	if got := rest.GetRefund().GetAmount(); got != 70000 {
+		t.Errorf("the rest refunded %d, want 70000", got)
+	}
+	if got := r.stripe.intent(p.GetProviderPaymentId()).refunded; got != 1000 {
+		t.Errorf("provider refunded %d minor units, want 1000", got)
+	}
+	again, err := refund(r, p.GetId(), 0, "r2")
+	if err != nil || again.GetRefund().GetId() != rest.GetRefund().GetId() {
+		t.Errorf("a retry of the rest under its key = %v, %v; want the same refund", again, err)
+	}
+	// Under a key that names a partial refund, "what remains" is that refund
+	// only once, with it, nothing remains (the request's goal holds); while
+	// something remains it names another refund.
+	q := r.paid("user-b", 100000, "k2")
+	if _, err := refund(r, q.GetId(), 30000, "q1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := refund(r, q.GetId(), 0, "q1"); status.Code(err) != codes.AlreadyExists {
+		t.Errorf("\"the rest\" under the key of a partial refund, 70 remaining: err = %v, want AlreadyExists", err)
+	}
+	if got, err := refund(r, p.GetId(), 0, "r1"); err != nil || got.GetRefund().GetAmount() != 30000 {
+		t.Errorf("\"the rest\" under the key of a partial refund, nothing remaining = %v, %v; want that refund", got, err)
+	}
+	before := r.stripe.count("/v1/refunds")
+	_, err = refund(r, p.GetId(), 0, "r3")
+	wantCode(t, err, codes.InvalidArgument, "a refund of the rest when nothing remains")
+	if n := r.stripe.count("/v1/refunds"); n != before {
+		t.Errorf("a refund of nothing reached the provider (%d → %d)", before, n)
+	}
+	if n := r.store.count("refunds"); n != 3 {
+		t.Errorf("refund rows = %d, want 3", n)
+	}
+	wantNoLocksLeft(t, r)
+}
+
+// A success nobody can check is not trusted (stripe_webhooks/success-checked-
+// against-the-row): a payment whose webhook has not arrived, which the
+// provider reports succeeded WITHOUT what it took, is not refunded — the
+// webhook path refuses the same success, and redelivers.
+func TestFlow_RefundBeforeTheWebhook_OfAnUncheckableSuccessIsRefused(t *testing.T) {
+	r := erringRig(t)
+	p := r.charge("user-a", 100000, "k") // locally REQUIRES_ACTION
+	r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
+	r.stripe.mu.Lock()
+	r.stripe.silentReceived = true
+	r.stripe.mu.Unlock()
+	_, err := refund(r, p.GetId(), 0, "r1")
+	wantCode(t, err, codes.FailedPrecondition, "a refund of a success the provider reports without amount_received")
+	if n := r.stripe.count("/v1/refunds"); n != 0 {
+		t.Errorf("an uncheckable success was refunded at the provider (%d calls)", n)
+	}
+	wantNoLocksLeft(t, r)
+}
+
+// An UNAVAILABLE answered before the call changed anything is marked
+// replay-safe, so a w17 client sends it again (the SDK replays a handler's
+// UNAVAILABLE only when so marked): a storage read or the provider's
+// refund lookup that failed before the payment's lock. One answered after the
+// provider was asked to refund is not — the refund may have been made.
+func TestRefundPayment_OnlyAnUnavailableBeforeAnyEffectIsReplaySafe(t *testing.T) {
+	r := newRig(t)
+	p := r.paid("user-a", 100000, "k")
+
+	r.store.injectBefore("GetPayment", errTransient)
+	_, err := refund(r, p.GetId(), 10000, "r1")
+	if status.Code(err) != codes.Unavailable || !grpcerr.IsReplaySafe(err) {
+		t.Errorf("a storage read failing before anything: %v (replay-safe %v), want a replay-safe Unavailable", err, grpcerr.IsReplaySafe(err))
+	}
+
+	r.stripe.failNextList("/v1/refunds", http.StatusInternalServerError)
+	_, err = refund(r, p.GetId(), 10000, "r1")
+	if status.Code(err) != codes.Unavailable || !grpcerr.IsReplaySafe(err) {
+		t.Errorf("the provider's refund lookup failing: %v (replay-safe %v), want a replay-safe Unavailable", err, grpcerr.IsReplaySafe(err))
+	}
+
+	r.stripe.failNext(http.StatusInternalServerError)
+	_, err = refund(r, p.GetId(), 10000, "r1")
+	if status.Code(err) != codes.Unavailable || grpcerr.IsReplaySafe(err) {
+		t.Errorf("the provider's refund failing: %v (replay-safe %v), want an Unavailable NOT marked replay-safe", err, grpcerr.IsReplaySafe(err))
+	}
 }

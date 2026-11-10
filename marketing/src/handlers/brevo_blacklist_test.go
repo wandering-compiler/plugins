@@ -16,6 +16,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
+
 	pb "github.com/wandering-compiler/plugins/marketing/gen/pb"
 	"github.com/wandering-compiler/plugins/marketing/lib/brevo"
 )
@@ -689,5 +691,80 @@ func TestContactStatements_ANewRowStartsBlacklisted(t *testing.T) {
 		if strings.Contains(update, "sent_blacklisted") {
 			t.Errorf("%s: the update of an existing row touches sent_blacklisted: %s", rpc, dql.String())
 		}
+	}
+}
+
+// brevo/reconcile-once: a yes handled between the pass's read of the rows and
+// its blacklisting write is not overwritten for good. The pass records its
+// blacklisting first, writes it, and reads the row again: holding the newest
+// yes, it subscribes the contact on that yes (the blacklist Brevo holds is its
+// own, not the person's), as an address write does.
+func TestReconcile_AConsentLandingDuringThePassStandsSubscribed(t *testing.T) {
+	f := &fakeBrevo{known: map[string]bool{uC: true}, contacts: []brevo.Contact{{ID: 3, ExtID: uC}}}
+	l := &ledger{contacts: map[string]*pb.ContactRow{}}
+	tl := tool(t, f, l, "all", "", "")
+	f.onUpdate = func() {
+		// The person says yes now; the consent handler runs to its end
+		// before the pass's write lands.
+		if err := tl.onConsentChanged(context.Background(), &pb.AuthMarketingConsentChanged{UserId: uC, Consent: true, DecidedAt: timestamppb.New(day2)}); err != nil {
+			t.Errorf("the consent: %v", err)
+		}
+	}
+	if done, err := tl.reconcileBlacklist(context.Background(), "replica-1"); err != nil || !done {
+		t.Fatalf("done %v, err %v", done, err)
+	}
+	if f.blacklisted[uC] {
+		t.Errorf("the contact of a user who said yes during the pass was left blacklisted: updates %v", f.updates)
+	}
+	if c := l.contacts[uC]; c.GetSentBlacklisted() || !c.GetConsent() {
+		t.Errorf("row = %+v, want the yes and sent_blacklisted false", c)
+	}
+}
+
+// An unsubscribe dated in the future (a clock fault, or a forged body sent
+// with the token) is dated now: recorded "in 2030", every consent decided
+// before 2030 would read as older than it and stay blacklisted, and auth
+// would be handed a withdrawal from the future.
+func TestIngestBrevo_AFutureUnsubscribeIsDatedNow(t *testing.T) {
+	l := &ledger{contacts: map[string]*pb.ContactRow{
+		"u1": {UserId: "u1", Email: "a@x.example", Consent: true, ConsentAt: timestamppb.New(day1)},
+	}}
+	h := &hookCalls{}
+	body := `{"event":"unsubscribe","email":"a@x.example","ts_event":1893456000}` // 2030-01-01
+	before := time.Now().UTC()
+	if _, err := webhook(t, l, "s3cret", h).IngestBrevo(withToken("s3cret"), &pb.IngestBrevoReq{RawPayload: []byte(body)}); err != nil {
+		t.Fatal(err)
+	}
+	got := l.contacts["u1"].GetUnsubscribedAt().AsTime()
+	if got.After(time.Now().UTC()) || got.Before(before.Add(-time.Second)) {
+		t.Errorf("unsubscribed_at = %v, want now", got)
+	}
+	if len(h.got) != 1 || strings.HasSuffix(h.got[0], "2030-01-01T00:00:00Z") {
+		t.Errorf("the hook was handed %v, want a withdrawal dated now", h.got)
+	}
+}
+
+// An UNAVAILABLE answered before the delivery wrote anything — the lookup of
+// the first address failing — is marked replay-safe, so a w17 client sends
+// it again (the SDK replays a handler's UNAVAILABLE only when so marked). One
+// answered after an unsubscribe of the delivery was recorded, or after the
+// hook was called, is not.
+func TestIngestBrevo_OnlyAnUnavailableBeforeAnyWriteIsReplaySafe(t *testing.T) {
+	down := status.Error(codes.Unavailable, "database unavailable")
+	l := &ledger{contacts: map[string]*pb.ContactRow{"u1": {UserId: "u1", Email: "a@x.example"}},
+		byEmailErr: map[string]error{"z@x.example": down}}
+	w := webhook(t, l, "s3cret", &hookCalls{})
+	_, err := w.IngestBrevo(withToken("s3cret"), &pb.IngestBrevoReq{RawPayload: []byte(`{"event":"unsubscribe","email":"z@x.example"}`)})
+	if status.Code(err) != codes.Unavailable || !grpcerr.IsReplaySafe(err) {
+		t.Errorf("the lookup failing first: %v (replay-safe %v), want a replay-safe Unavailable", err, grpcerr.IsReplaySafe(err))
+	}
+	_, err = w.IngestBrevo(withToken("s3cret"), &pb.IngestBrevoReq{RawPayload: []byte(`[` + unsubscribe + `,{"event":"unsubscribe","email":"z@x.example"}]`)})
+	if status.Code(err) != codes.Unavailable || grpcerr.IsReplaySafe(err) {
+		t.Errorf("the lookup failing after a write: %v (replay-safe %v), want an Unavailable NOT marked replay-safe", err, grpcerr.IsReplaySafe(err))
+	}
+	failing := webhook(t, &ledger{contacts: map[string]*pb.ContactRow{"u1": {UserId: "u1", Email: "a@x.example"}}}, "s3cret", &hookCalls{err: errors.New("unreachable")})
+	_, err = failing.IngestBrevo(withToken("s3cret"), &pb.IngestBrevoReq{RawPayload: []byte(unsubscribe)})
+	if status.Code(err) != codes.Unavailable || grpcerr.IsReplaySafe(err) {
+		t.Errorf("a failed hook: %v (replay-safe %v), want an Unavailable NOT marked replay-safe", err, grpcerr.IsReplaySafe(err))
 	}
 }

@@ -148,5 +148,5 @@ func (h *PaymentServiceHandler) GetMyUsageMeter(ctx context.Context, req *pb.Get
 		// Nothing reported yet: the meter row appears with the first report.
 		return &pb.GetUsageMeterResp{Meter: &pb.UsageMeter{UserId: caller, Meter: req.GetMeter(), Period: period}}, nil
 	}
-	return got, err
+	return got, beforeAnyEffect(err)
 }

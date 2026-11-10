@@ -389,3 +389,29 @@ func TestFlow_SubscriptionFoundUnderTheKeyOnAnotherPlan_IsRefused(t *testing.T) 
 		t.Errorf("local subscriptions = %d, want 0 — the pro subscription was filed under basic", n)
 	}
 }
+
+// The same for a refund of what remains (amount = 0) after a partial one: the
+// retry finds the provider's refund by its key and records it once — the rest
+// it was, not the whole payment.
+func TestFlow_RefundOfTheRestWhoseLocalRecordFailed_RetriedAfterTheProviderForgotTheKey_RefundsOnce(t *testing.T) {
+	r := newRig(t)
+	p := r.paid("user-a", 100000, "k")
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 30000, IdempotencyKey: "r0"}); err != nil {
+		t.Fatal(err)
+	}
+	r.store.injectBefore("CreateRefund", errTransient)
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), IdempotencyKey: "r1"}); err == nil {
+		t.Fatal("the first attempt was meant to fail at the local insert")
+	}
+	r.stripe.forgetKeys()
+	again, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), IdempotencyKey: "r1"})
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if got := r.stripe.intent(p.GetProviderPaymentId()).refunded; got != 1000 {
+		t.Errorf("provider refunded %d minor units, want 1000 — 300 and the rest, once", got)
+	}
+	if again.GetRefund().GetAmount() != 70000 || r.store.count("refunds") != 2 {
+		t.Errorf("the retry recorded %+v (local refunds %d), want the rest of 7", again.GetRefund(), r.store.count("refunds"))
+	}
+}

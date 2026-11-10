@@ -469,7 +469,7 @@ func TestCreatePayment_ProviderFailureIsUnavailable(t *testing.T) {
 func TestRefundPayment_Full(t *testing.T) {
 	be := &fakeBackend{refundRes: backend.RefundResult{ProviderRefundID: "re_1", Status: "succeeded"}}
 	m := &fakeMutation{}
-	q := &fakeQuery{payment: &pb.Payment{Id: "pay-7", ProviderPaymentId: "pi_7", Amount: 200000, Currency: "usd"}}
+	q := &fakeQuery{payment: &pb.Payment{Id: "pay-7", ProviderPaymentId: "pi_7", Amount: 200000, Currency: "usd", Status: pb.Payment_SUCCEEDED}}
 	h := newHandler(q, m, be)
 
 	resp, err := h.RefundPayment(context.Background(), &pb.RefundPaymentReq{PaymentId: "pay-7", IdempotencyKey: "idem-full"}) // no amount → full
@@ -492,7 +492,7 @@ func TestRefundPayment_Full(t *testing.T) {
 
 func TestRefundPayment_Partial(t *testing.T) {
 	be := &fakeBackend{refundRes: backend.RefundResult{ProviderRefundID: "re_2"}}
-	q := &fakeQuery{payment: &pb.Payment{Id: "pay-8", ProviderPaymentId: "pi_8", Amount: 200000, Currency: "usd"}}
+	q := &fakeQuery{payment: &pb.Payment{Id: "pay-8", ProviderPaymentId: "pi_8", Amount: 200000, Currency: "usd", Status: pb.Payment_SUCCEEDED}}
 	h := newHandler(q, &fakeMutation{}, be)
 	if _, err := h.RefundPayment(context.Background(), &pb.RefundPaymentReq{PaymentId: "pay-8", Amount: 50000, IdempotencyKey: "idem-partial"}); err != nil {
 		t.Fatalf("RefundPayment: %v", err)
@@ -535,7 +535,7 @@ func TestRefundPayment_RequiresIdempotencyKey(t *testing.T) {
 // hit Stripe's idempotency replay and was silently swallowed. The handler
 // must forward the caller key verbatim.
 func TestRefundPayment_DistinctKeysNotCollapsed(t *testing.T) {
-	q := &fakeQuery{payment: &pb.Payment{Id: "pay-10", ProviderPaymentId: "pi_10", Amount: 200000, Currency: "usd"}}
+	q := &fakeQuery{payment: &pb.Payment{Id: "pay-10", ProviderPaymentId: "pi_10", Amount: 200000, Currency: "usd", Status: pb.Payment_SUCCEEDED}}
 	be := &fakeBackend{refundRes: backend.RefundResult{ProviderRefundID: "re_a"}}
 	h := newHandler(q, &fakeMutation{}, be)
 
