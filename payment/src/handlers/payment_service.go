@@ -101,7 +101,7 @@ func (h *PaymentServiceHandler) CreateCustomer(ctx context.Context, req *pb.NewC
 	}
 	got, err := h.Query.GetCustomerByUserId(ctx, &pb.GetCustomerByUserIdReq{UserId: req.GetUserId()})
 	if err != nil && !absent(err) {
-		return nil, err
+		return nil, beforeAnyEffect(err)
 	}
 	if c := got.GetCustomer(); c != nil {
 		return &pb.NewCustomerResp{Customer: c}, nil
@@ -439,9 +439,11 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	if amount != 0 && !isPositiveAmount(amount) {
 		return nil, invalidArg("amount must be positive (or 0 for what remains of the payment)")
 	}
+	// Until the lock below, nothing is written and nothing is asked of the
+	// provider but reads: an UNAVAILABLE here is replay-safe.
 	got, err := h.Query.GetPayment(ctx, &pb.GetPaymentReq{Id: req.GetPaymentId()})
 	if err != nil {
-		return nil, err
+		return nil, beforeAnyEffect(err)
 	}
 	payment := got.GetPayment()
 	if payment == nil {
@@ -458,11 +460,11 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	storedKey := refundKey(req.GetIdempotencyKey())
 	if prior, err := h.refundByKey(ctx, storedKey); err != nil || prior != nil {
 		if err != nil {
-			return nil, err
+			return nil, beforeAnyEffect(err)
 		}
 		if rest {
 			if amount, err = h.restOf(ctx, payment, prior.GetAmount(), prior); err != nil {
-				return nil, err
+				return nil, beforeAnyEffect(err)
 			}
 		}
 		resp, err := sameRefund(prior, payment, amount)
@@ -499,15 +501,15 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	// refund's metadata recognises it, so ask before refunding again.
 	res, found, err := h.Backend.FindRefund(ctx, payment.GetProviderPaymentId(), req.GetIdempotencyKey())
 	if err != nil {
-		return nil, providerFailure(err)
+		return nil, beforeAnyEffect(providerFailure(err))
 	}
 	if found && rest {
 		local, err := h.Query.GetRefundByProviderId(ctx, &pb.GetRefundByProviderIdReq{ProviderRefundId: res.ProviderRefundID})
 		if err != nil && !absent(err) {
-			return nil, err
+			return nil, beforeAnyEffect(err)
 		}
 		if amount, err = h.restOf(ctx, payment, res.Amount.Amount, local.GetRefund()); err != nil {
-			return nil, err
+			return nil, beforeAnyEffect(err)
 		}
 	}
 	if found && res.Amount.Amount != amount {
@@ -530,7 +532,8 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		err = h.underRefundLock(ctx, payment.GetId(), func(ctx, txCtx context.Context, locked *pb.LockPaymentForRefundResp) (bool, error) {
 			var err error
 			if amount, err = h.refundAllowed(ctx, txCtx, payment, locked, req.GetAmount()); err != nil {
-				return false, err
+				// Reads only, in a transaction that is rolled back.
+				return false, beforeAnyEffect(err)
 			}
 			// A top-up's credit leaves with its money (prepaid; no-op
 			// otherwise). Taken before the provider is asked, so a refund of
@@ -603,7 +606,7 @@ func (h *PaymentServiceHandler) underRefundLock(ctx context.Context, paymentID s
 		if err == nil && locked.GetId() == "" {
 			err = notFound("payment not found")
 		}
-		return err
+		return beforeAnyEffect(err) // the lock alone; the transaction is rolled back
 	}, func(ctx, txCtx context.Context) (bool, error) {
 		return fn(ctx, txCtx, locked)
 	})

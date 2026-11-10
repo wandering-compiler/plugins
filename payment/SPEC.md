@@ -603,6 +603,7 @@ a fake store proves the handler's sequencing only.
 | ID | MUST hold | Proof |
 |---|---|---|
 | `payment/no-float-money` | No amount is ever a float: int64 `MONEY` at scale 4 on the wire and at rest (`BIGINT`), the currency's integer minor units at the provider boundary, comparison and arithmetic as integers with overflow refused. | `TestToMinorUnits`, `TestFromMinorUnits`, `TestAmountArithmetic` |
+| `payment/replay-safe-before-effect` | An `UNAVAILABLE` the plugin answers before the call changed anything — a storage read, the provider's refund lookup, a refund's guard under its row lock (rolled back), the lock itself, the webhook's ledger read, and every read of the `GetMy*` reads — MUST be marked replay-safe (`grpcerr.ReplaySafe`), so a w17 client sends the call again; one answered after a write or a provider call that may have acted MUST NOT be (the SDK then does not replay it). | `TestRefundPayment_OnlyAnUnavailableBeforeAnyEffectIsReplaySafe` |
 | `payment/amounts-checked-before-provider` | Every amount and currency is validated against the column and the currency's scale before the provider is called, and so are a charge's description (500 characters) and a customer's address (an address, 320 characters), so a provider object is never created for a value the local row cannot hold. | `TestFlow_ChargeAmountAndCurrencyRefusals_NeverReachTheProvider`, `TestFlow_Refund_RefusalsNeverReachTheProvider`, `TestFlow_CreatePlan_Refusals`, `TestFlow_ColumnRefusalsNeverReachTheProvider` |
 
 #### Idempotency keys

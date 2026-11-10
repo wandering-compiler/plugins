@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 	"github.com/wandering-compiler/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 )
 
@@ -457,4 +459,32 @@ func TestFlow_RefundBeforeTheWebhook_OfAnUncheckableSuccessIsRefused(t *testing.
 		t.Errorf("an uncheckable success was refunded at the provider (%d calls)", n)
 	}
 	wantNoLocksLeft(t, r)
+}
+
+// An UNAVAILABLE answered before the call changed anything is marked
+// replay-safe, so a w17 client sends it again (the SDK replays a handler's
+// UNAVAILABLE only when so marked): a storage read or the provider's
+// refund lookup that failed before the payment's lock. One answered after the
+// provider was asked to refund is not — the refund may have been made.
+func TestRefundPayment_OnlyAnUnavailableBeforeAnyEffectIsReplaySafe(t *testing.T) {
+	r := newRig(t)
+	p := r.paid("user-a", 100000, "k")
+
+	r.store.injectBefore("GetPayment", errTransient)
+	_, err := refund(r, p.GetId(), 10000, "r1")
+	if status.Code(err) != codes.Unavailable || !grpcerr.IsReplaySafe(err) {
+		t.Errorf("a storage read failing before anything: %v (replay-safe %v), want a replay-safe Unavailable", err, grpcerr.IsReplaySafe(err))
+	}
+
+	r.stripe.failNextList("/v1/refunds", http.StatusInternalServerError)
+	_, err = refund(r, p.GetId(), 10000, "r1")
+	if status.Code(err) != codes.Unavailable || !grpcerr.IsReplaySafe(err) {
+		t.Errorf("the provider's refund lookup failing: %v (replay-safe %v), want a replay-safe Unavailable", err, grpcerr.IsReplaySafe(err))
+	}
+
+	r.stripe.failNext(http.StatusInternalServerError)
+	_, err = refund(r, p.GetId(), 10000, "r1")
+	if status.Code(err) != codes.Unavailable || grpcerr.IsReplaySafe(err) {
+		t.Errorf("the provider's refund failing: %v (replay-safe %v), want an Unavailable NOT marked replay-safe", err, grpcerr.IsReplaySafe(err))
+	}
 }

@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
 	"github.com/wandering-compiler/plugins/payment/lib/backend"
@@ -62,6 +63,19 @@ func isOverdraw(err error) bool {
 		}
 	}
 	return false
+}
+
+// beforeAnyEffect marks an UNAVAILABLE answered before the call changed
+// anything — no row written, no provider object created or changed — as
+// replay-safe (grpcerr.ReplaySafe): a w17 client then sends the call again,
+// which it does not do for a handler's UNAVAILABLE otherwise, since one
+// answered after a write must not run twice. Any other error is returned as
+// it is. Use it only where nothing has happened yet in this call.
+func beforeAnyEffect(err error) error {
+	if status.Code(err) == codes.Unavailable {
+		return grpcerr.ReplaySafe(err)
+	}
+	return err
 }
 
 // invalidArg returns a codes.InvalidArgument status for a caller-input

@@ -294,7 +294,7 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 
 	planResp, err := h.Query.GetPlanBySlug(ctx, &pb.GetPlanBySlugReq{Slug: slug})
 	if err != nil && !absent(err) {
-		return nil, err
+		return nil, beforeAnyEffect(err)
 	}
 	plan := planResp.GetPlan()
 	if plan == nil {
@@ -523,7 +523,7 @@ func (h *PaymentServiceHandler) GetMySubscription(ctx context.Context, req *pb.G
 	}
 	got, err := h.Query.GetSubscription(ctx, &pb.GetSubscriptionReq{Id: req.GetId()})
 	if err := ownRow(err, got.GetSubscription().GetCustomerId(), customer); err != nil {
-		return nil, err
+		return nil, beforeAnyEffect(err)
 	}
 	return got, nil
 }
