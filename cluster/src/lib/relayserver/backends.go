@@ -738,9 +738,10 @@ func TicketPicker(pool *relaycore.Pool, backends *Backends, workers *workeradmit
 			return tunnel.Backend{}, refusal.New(codes.Unauthenticated, refusal.TicketMissing,
 				"relay: no "+TicketHeader+" — ask the control plane to schedule a task and send the ticket it grants")
 		}
-		// The engine the caller expects, if it names one. The relay checks it
-		// against the reservation and does not consume it: the worker routes
-		// on the same header.
+		// The engine the caller expects, if it names one (the first value;
+		// every value is dropped below). The relay checks it against the
+		// reservation and then forwards the reservation's engine in its place:
+		// the worker routes on the relay's word, never the caller's.
 		named := ""
 		if ev := md.Get(EngineHeader); len(ev) > 0 {
 			named = ev[0]
