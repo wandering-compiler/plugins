@@ -142,3 +142,46 @@ func TestRevokeOrgInvites_TheBackofficeWithdrawsAcrossOrganizations(t *testing.T
 		t.Errorf("the backoffice: err = %v, revoked %d, closed %v — want both, each in its organization", err, resp.GetRevoked(), m.closed)
 	}
 }
+
+// backofficeCeilingMock is realmInviteMock with a catalogue the ceiling can
+// refuse: "member" carries nothing, "owner" is the organization's wildcard.
+type backofficeCeilingMock struct {
+	*realmInviteMock
+}
+
+func (m backofficeCeilingMock) ListOrgScopedRoles(context.Context, *pb.ListOrgScopedRolesReq, ...grpc.CallOption) (*pb.ListOrgScopedRolesResp, error) {
+	return &pb.ListOrgScopedRolesResp{Roles: []*pb.OrgScopedRole{{Id: "role-1", Name: "member"}, {Id: "role-owner", Name: "owner"}}}, nil
+}
+
+func (m backofficeCeilingMock) ListOrgRoleRows(ctx context.Context, _ *pb.ListOrgRoleRowsReq, _ ...grpc.CallOption) (*pb.ListOrgRoleRowsResp, error) {
+	return rowsFromScoped(m.ListOrgScopedRoles(ctx, &pb.ListOrgScopedRolesReq{}))
+}
+
+func (m backofficeCeilingMock) ListRoleGrants(context.Context, *pb.ListRoleGrantsReq, ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
+	return &pb.ListRoleGrantsResp{Grants: []*pb.RoleGrant{{RoleId: "role-1"}, {RoleId: "role-owner", AllPermissions: true}}}, nil
+}
+
+// The backoffice's invitations are held to the role ceiling as a member's
+// are: a realm operator who does not hold everything a role carries cannot
+// invite into it, and a withdrawal naming one invitation above them closes
+// none — the whole call is refused before the first close.
+func TestBackofficeInvites_HeldToTheRoleCeiling(t *testing.T) {
+	h, inner := realmInviteHandler(true)
+	m := backofficeCeilingMock{inner}
+	h.Query, h.Mutation = m, m
+	// ctxWithCaller holds permission 5 only; the lock allocates 1 and 2, so
+	// the wildcard carries what ops does not hold.
+	ops := ctxWithCaller("ops")
+
+	if _, err := h.InviteToOrgAdmin(ops, &pb.InviteToOrgReq{Org: "acme", Email: "boss@acme.example", Role: "owner"}); refusalCodeOf(err) != CodeRoleAboveCaller || inner.storedOrg != "" {
+		t.Errorf("inviting into the wildcard: err = %v, stored in %q — want %s and nothing written", err, inner.storedOrg, CodeRoleAboveCaller)
+	}
+	if _, err := h.InviteToOrgAdmin(ops, &pb.InviteToOrgReq{Org: "acme", Email: "x@acme.example", Role: "member"}); err != nil || inner.storedOrg != "org-acme" {
+		t.Errorf("a role within the ceiling: err = %v, stored in %q", err, inner.storedOrg)
+	}
+
+	inner.pending["inv-boss"] = &pb.PendingOrgInviteRef{Id: "inv-boss", OrgId: "org-globex", Role: "owner"}
+	if _, err := h.RevokeOrgInvites(ops, &pb.RevokeOrgInvitesReq{Ids: []string{"inv-a", "inv-boss", "inv-b"}}); refusalCodeOf(err) != CodeInviteAboveCaller || len(inner.closed) != 0 {
+		t.Errorf("a withdrawal naming an invitation above the caller: err = %v, closed %v — want %s and nothing closed", err, inner.closed, CodeInviteAboveCaller)
+	}
+}

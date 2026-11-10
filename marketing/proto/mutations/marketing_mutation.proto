@@ -146,14 +146,14 @@ service MarketingMutation {
   }
 
   // SetContactEmail — the user's last address, lower-cased by the caller.
-  // Gated brevo.
+  // A new row starts sent_blacklisted (see EnsureContact). Gated brevo.
   rpc SetContactEmail(SetContactEmailReq) returns (ContactWriteResp) {
     option (w17.contrib.plugin_feature_rpc) = "brevo";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "UPSERT INTO @module.Contact SET user_id = :user_id, email = :email "
+          "UPSERT INTO @module.Contact SET user_id = :user_id, email = :email, sent_blacklisted = TRUE "
           "ON CONFLICT (user_id) DO UPDATE SET email = :email"
       }
     };
@@ -161,13 +161,20 @@ service MarketingMutation {
 
   // EnsureContact — the user's row, created empty when there is none, so
   // the conditional writes below have a row to hold back. Gated brevo.
+  //
+  // A new row starts sent_blacklisted: a contact the plugin has not
+  // subscribed is blacklisted as far as it knows — by its own writes, or by
+  // Brevo, which creates the contact of an event blacklisted. sent_blacklisted
+  // false then means only that the plugin subscribed the contact, so a
+  // blacklist Brevo answers over it is the person's unsubscribe, and one over
+  // a contact the plugin never subscribed is not.
   rpc EnsureContact(EnsureContactReq) returns (ContactWriteResp) {
     option (w17.contrib.plugin_feature_rpc) = "brevo";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "UPSERT INTO @module.Contact SET user_id = :user_id "
+          "UPSERT INTO @module.Contact SET user_id = :user_id, sent_blacklisted = TRUE "
           "ON CONFLICT (user_id) DO NOTHING"
       }
     };

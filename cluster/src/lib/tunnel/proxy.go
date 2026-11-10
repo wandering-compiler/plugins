@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/wandering-compiler/sdk/go/lib/principal"
+
 	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
 )
 
@@ -51,17 +53,35 @@ func Handler(pick Picker) grpc.StreamHandler {
 		defer be.Release()
 
 		// The caller's metadata travels as-is, less what the picker consumed
-		// to admit the call. The relay adds nothing and removes nothing of the
-		// worker's: it is a pipe, and a pipe that edited the worker's headers
-		// would be a second place where the worker's contract lives. Every
-		// other header, an authorization header the caller sent included,
-		// reaches the worker — a machine the deploy enrolled, so a caller must
-		// not send it credentials meant for another service.
+		// to admit the call and less every key only a gateway may write. The
+		// relay adds nothing and removes nothing else: it is a pipe, and a pipe
+		// that edited the worker's headers would be a second place where the
+		// worker's contract lives. Every other header, an authorization header
+		// the caller sent included, reaches the worker — a machine the deploy
+		// enrolled, so a caller must not send it credentials meant for another
+		// service.
+		//
+		// The gateway-owned keys (principal.IsEdgeReservedKey: the identity
+		// envelope and scopes under `x-w17-*`, the labels under `w17-label-*`,
+		// the transaction routing keys `w17-tx-id` / `w17-conn-id`, and their
+		// grpc-gateway spellings) are believed downstream only because every
+		// edge strips a client's copy. The callers port is an edge — any
+		// principal the ACL lets reserve holds a ticket — so a worker built
+		// from the SDK pieces that read them would otherwise take the ticket
+		// holder's word for who is calling, in which organization, inside
+		// which transaction.
 		md, _ := metadata.FromIncomingContext(ss.Context())
 		md = md.Copy()
 		for _, k := range be.Consumed {
 			md.Delete(k)
 		}
+		for k := range md {
+			if principal.IsEdgeReservedKey(k) {
+				delete(md, k)
+			}
+		}
+		// After the strip: what the backend sets (the reservation's engine)
+		// is the relay's word, not the caller's, and must reach the worker.
 		for k, v := range be.Set {
 			md.Set(k, v)
 		}

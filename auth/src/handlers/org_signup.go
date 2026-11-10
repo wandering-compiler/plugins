@@ -173,7 +173,9 @@ func hostIsBound(ctx context.Context, h *AuthServiceHandler, host string) (bool,
 // policy's kind, holding its role — as accepting an invitation does, in the
 // registration's own transaction. The role is resolved now, against the
 // organization's catalogue: one retired since the policy was set refuses the
-// registration rather than writing a membership without its grant.
+// registration rather than writing a membership without its grant — and never
+// falls back to another role, which nobody chose for this policy and nobody's
+// ceiling was checked against.
 func writeSignUpJoin(txCtx context.Context, h *AuthServiceHandler, userID string, j *orgJoin) error {
 	// Under the organization's lock, as every grant there is: the role is
 	// resolved and granted with no edit or retirement of it in between.
@@ -259,8 +261,9 @@ func checkPolicyKind(ctx context.Context, kind string) error {
 // SetOrgSignUpPolicy sets whether a kind may register into the organization
 // on its host without an invitation, and with which role. The role must be
 // one the organization can hand out (its org-scoped catalogue, never a
-// machine account's); a closed policy needs none. Replacing a policy ends
-// the previous row.
+// machine account's) and one the caller may grant (the role ceiling,
+// role_ceiling.go — what they hold covers everything it carries); a closed
+// policy needs none. Replacing a policy ends the previous row.
 func (h *AuthServiceHandler) SetOrgSignUpPolicy(ctx context.Context, req *pb.SetOrgSignUpPolicyReq) (*pb.SetOrgSignUpPolicyResp, error) {
 	caller, err := callerUserID(ctx)
 	if err != nil {
@@ -278,7 +281,14 @@ func (h *AuthServiceHandler) SetOrgSignUpPolicy(ctx context.Context, req *pb.Set
 			return nil, refusal(ctx, codes.InvalidArgument, "org_signup: an open policy needs the role a registration gets",
 				CodeSignUpPolicyInvalid, "role", MsgSignUpPolicyRole, nil)
 		}
-		if _, err := h.roleIDByName(ctx, req.GetOrgId(), role); err != nil {
+		roleID, err := h.roleIDByName(ctx, req.GetOrgId(), role)
+		if err != nil {
+			return nil, err
+		}
+		// The registration grants this role later with no ceiling of its own
+		// (the registrant holds nothing), so the policy is where the grant is
+		// authorised: held to the setter's ceiling, as an invitation is.
+		if _, err := h.checkMayGrantRole(ctx, roleID); err != nil {
 			return nil, err
 		}
 	} else {

@@ -218,6 +218,14 @@ service UsageQuery {
   // the report — and a run recorded as one row per turn, many of them small,
   // could price at zero.
   //
+  // A kind is priced only when the row USED it:
+  // `CASE WHEN <tokens> = 0 THEN 0 ELSE <tokens> * <rate> END`. A NULL rate
+  // means "this kind is not priced for this model" (a model with no cache, say),
+  // and `0 * NULL` is NULL in SQL — priced unconditionally, every row of such a
+  // model was unpriced although it spent nothing unpriced, and the limiter
+  // refused every call of a capped scope. A row is unpriced only when a kind it
+  // used has no rate (or no price applies at all).
+  //
   // ⚠️ What was tried first and REVERTED: putting currency in the GROUP BY. An
   // unpriced call has a NULL currency, so grouping on it splits every rollup that
   // mixes priced and unpriced calls — the ordinary case, the one `priced_calls`
@@ -242,9 +250,9 @@ service UsageQuery {
           "FROM @module.Usage u "
           "JOIN @module.Model m ON m.id = u.model_id "
           "LEFT JOIN LATERAL ("
-          "  SELECT ((u.input_tokens - u.cached_input_tokens) * pr.input_per_million_minor "
-          "          + u.cached_input_tokens * pr.cached_input_per_million_minor "
-          "          + u.output_tokens * pr.output_per_million_minor) / 1000000.0 AS line_minor, "
+          "  SELECT ((CASE WHEN u.input_tokens - u.cached_input_tokens = 0 THEN 0 ELSE (u.input_tokens - u.cached_input_tokens) * pr.input_per_million_minor END) "
+          "          + (CASE WHEN u.cached_input_tokens = 0 THEN 0 ELSE u.cached_input_tokens * pr.cached_input_per_million_minor END) "
+          "          + (CASE WHEN u.output_tokens = 0 THEN 0 ELSE u.output_tokens * pr.output_per_million_minor END)) / 1000000.0 AS line_minor, "
           "         pr.currency AS currency "
           "  FROM @module.ModelPrice pr "
           "  WHERE pr.model_id = u.model_id AND pr.valid_from <= u.started_at "
@@ -294,9 +302,9 @@ service UsageQuery {
           "JOIN @module.UsageLabel ul ON ul.usage_id = u.id "
           "JOIN @module.Label lb ON lb.id = ul.label_id "
           "LEFT JOIN LATERAL ("
-          "  SELECT ((u.input_tokens - u.cached_input_tokens) * pr.input_per_million_minor "
-          "          + u.cached_input_tokens * pr.cached_input_per_million_minor "
-          "          + u.output_tokens * pr.output_per_million_minor) / 1000000.0 AS line_minor, "
+          "  SELECT ((CASE WHEN u.input_tokens - u.cached_input_tokens = 0 THEN 0 ELSE (u.input_tokens - u.cached_input_tokens) * pr.input_per_million_minor END) "
+          "          + (CASE WHEN u.cached_input_tokens = 0 THEN 0 ELSE u.cached_input_tokens * pr.cached_input_per_million_minor END) "
+          "          + (CASE WHEN u.output_tokens = 0 THEN 0 ELSE u.output_tokens * pr.output_per_million_minor END)) / 1000000.0 AS line_minor, "
           "         pr.currency AS currency "
           "  FROM @module.ModelPrice pr "
           "  WHERE pr.model_id = u.model_id AND pr.valid_from <= u.started_at "

@@ -60,10 +60,14 @@ message Contact {
   // and a late event of the user writes nothing to the tool.
   google.protobuf.Timestamp erased_at = 6 [(w17.field) = { type: DATETIME, null: true }];
   // sent_blacklisted — the emailBlacklisted the plugin last wrote to the
-  // tool, or found there. FALSE until it writes one: before this column the
-  // plugin left every contact subscribed. A contact the tool blacklists while
-  // this says FALSE is one the person unsubscribed in the tool, and the
-  // plugin never subscribes it again on that decision.
+  // tool, or found there. A row the plugin creates starts TRUE (EnsureContact,
+  // SetContactEmail): a contact it has not subscribed is blacklisted — by its
+  // own writes, or by the tool, which creates the contact of an event
+  // blacklisted. The column's default is FALSE for the rows that existed
+  // before it: the plugin then left every contact subscribed. A contact the
+  // tool blacklists while this says FALSE — the plugin subscribed it — is one
+  // the person unsubscribed in the tool, and the plugin never subscribes it
+  // again on that decision.
   bool sent_blacklisted = 7 [(w17.field) = { default_auto: FALSE }];
 }
 

@@ -93,15 +93,11 @@ func (t *brevoTool) writeActivity(ctx context.Context, records []*w17pb.RequestE
 		users = append(users, u)
 	}
 	sort.Strings(users)
-	erased, err := t.erasedOf(ctx, users)
-	if err != nil {
-		return err
-	}
+	// The records of erased users were dropped by ConsumeMarketing, which
+	// also undoes what an erasure landing during this write would lose.
 	keys := make([]key, 0, len(latest))
 	for k := range latest {
-		if !erased[k.user] {
-			keys = append(keys, k)
-		}
+		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool {
 		if keys[i].user != keys[j].user {
@@ -119,30 +115,11 @@ func (t *brevoTool) writeActivity(ctx context.Context, records []*w17pb.RequestE
 		}
 	}
 	for _, u := range users {
-		if erased[u] {
-			continue
-		}
 		if err := t.writeUserActivity(ctx, u, touched[u]); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// erasedOf reports which of users were erased: a late record of theirs writes
-// nothing.
-func (t *brevoTool) erasedOf(ctx context.Context, users []string) (map[string]bool, error) {
-	resp, err := t.query.ListContacts(ctx, &pb.ListContactsReq{UserIds: users})
-	if err != nil {
-		return nil, fmt.Errorf("marketing plugin: reading the contacts of %d users: %w", len(users), err)
-	}
-	out := map[string]bool{}
-	for _, c := range resp.GetContacts() {
-		if c.GetErasedAt() != nil {
-			out[c.GetUserId()] = true
-		}
-	}
-	return out, nil
 }
 
 // writeUserActivity writes the user's moved attributes, and the time of their
