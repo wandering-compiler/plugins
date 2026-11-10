@@ -14,6 +14,7 @@ import (
 
 	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
@@ -79,7 +80,7 @@ func (h *ClusterServiceHandler) withBansFrom(
 	}
 	bans, version, err := read(ctx)
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the ban set: %v", err)
+		return nil, grpcerr.ReplaySafe(status.Errorf(codes.Unavailable, "cluster: cannot read the ban set: %v", err))
 	}
 	return withBanSet(ctx, bans, version, full), nil
 }
@@ -101,7 +102,7 @@ func (h *ClusterServiceHandler) CheckWorkers(
 	}
 	relays, err := h.Relays.ListEnabled(ctx)
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err)
+		return nil, grpcerr.ReplaySafe(status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err))
 	}
 
 	// Counted before and after rather than reported per row, because the
@@ -111,7 +112,7 @@ func (h *ClusterServiceHandler) CheckWorkers(
 	// simply discovers nothing.
 	before, err := h.Workers.EnrolledCount(ctx)
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "cluster: cannot count workers: %v", err)
+		return nil, grpcerr.ReplaySafe(status.Errorf(codes.Unavailable, "cluster: cannot count workers: %v", err))
 	}
 
 	var unreachable []string
@@ -413,7 +414,7 @@ func (h *ClusterServiceHandler) IssueRegistrationCode(
 		return nil, status.Errorf(codes.NotFound, "cluster: no relay %q is registered", req.GetIds()[0])
 	}
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err)
+		return nil, grpcerr.ReplaySafe(status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err))
 	}
 	conn, err := h.acquire(ctx, r)
 	if err != nil {

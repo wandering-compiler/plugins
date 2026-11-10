@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 )
 
@@ -45,7 +46,7 @@ func (h *ClusterServiceHandler) decide(ctx context.Context, req *pb.DecideWorker
 	for _, id := range req.GetIds() {
 		ok, err := h.Workers.Exists(ctx, id)
 		if err != nil {
-			return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the worker registry: %v", err)
+			return nil, grpcerr.ReplaySafe(status.Errorf(codes.Unavailable, "cluster: cannot read the worker registry: %v", err))
 		}
 		if !ok {
 			unknown = append(unknown, fmt.Sprintf("%q", id))

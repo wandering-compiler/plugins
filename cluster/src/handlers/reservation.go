@@ -19,6 +19,7 @@ import (
 	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
 	"github.com/wandering-compiler/plugins/cluster/lib/resowner"
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 )
 
 // handleSep joins a relay's registry id, its own reservation id and the
@@ -198,7 +199,7 @@ func (h *ClusterServiceHandler) resolveHandle(ctx context.Context, handle, holde
 		return Relay{}, "", true, nil
 	}
 	if err != nil {
-		return Relay{}, "", false, status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err)
+		return Relay{}, "", false, grpcerr.ReplaySafe(status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err))
 	}
 	return relay, local, false, nil
 }

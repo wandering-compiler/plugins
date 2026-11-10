@@ -410,6 +410,7 @@ whatever they are asked by whoever can reach them.
 | ID | MUST hold | Proof |
 |---|---|---|
 | `agent/error-codes` | Each ending MUST map to the code in the table, on every entry point that can reach it. | `TestRunErrorMapping`, `TestRunAgent_PlumbingRefusals`, `TestEmptyRequestIsRefused`, `TestStreamRefusesAnEmptyRequest`, `TestBudgetExhaustionIsItsOwnCode`, `TestRunawayOutputIsItsOwnCode`, `TestComplete_CallerEndingIsNotAModelFailure` |
+| `agent/unavailable-is-not-replayed` | Every `Unavailable` the plugin answers follows a provider call (and its usage record), so none MUST be marked replay-safe: a w17 client returns it to its caller and never sends the paid call again on its own. | none (by construction: the only `Unavailable` sites map a model-call failure, after the provider was reached) |
 
 #### Configuration that must fail at boot
 
