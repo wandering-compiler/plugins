@@ -179,7 +179,7 @@ func (s workerRegistry) Decide(ctx context.Context, ids []string, ban bool, by s
 // the next set any replica sends (cluster SPEC, bans gap).
 func pastNewestDecision(newest time.Time) time.Time {
 	return newest.Truncate(time.Microsecond).
-		Add(time.Millisecond + time.Duration(rand.IntN(1000))*time.Microsecond)
+		Add(time.Millisecond + time.Duration(rand.IntN(1000))*time.Microsecond) //nolint:gosec // G404: spreads versions apart, not a secret
 }
 
 func (s workerRegistry) Exists(ctx context.Context, id string) (bool, error) {
