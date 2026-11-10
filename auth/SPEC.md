@@ -6,7 +6,7 @@ application built on it relies on. It is the reference the plugin's tests and
 the example projects are measured against. A property listed here without a
 proof is a gap, not a promise.
 
-It covers plugin version 0.1.0-rc.24.
+It covers plugin version 0.1.0-rc.58 and the unreleased changes in `changes/`.
 
 ## How to read it
 
@@ -45,7 +45,7 @@ It covers plugin version 0.1.0-rc.24.
 | `sign_up_confirmation` | off | `sign_up_turnkey` | — |
 | `sign_in_turnkey` | on | — | — |
 | `api_token` | off | `rbac` | — |
-| `devices` | off | — | — |
+| `devices` | off | `authenticate_turnkey` | — |
 | `oauth` | off | `email_verification` | — |
 | `two_factor` | off | `sign_in_turnkey` | — |
 | `two_factor_enrolment` | off | `two_factor` | — |
@@ -56,6 +56,7 @@ It covers plugin version 0.1.0-rc.24.
 | `org_invite` | off | `org_membership`, `rbac` | — |
 | `invite_accept_from_list` | off | `org_invite` | — |
 | `invite_accept_at_signup` | off | `org_invite` | — |
+| `backoffice_invites` | off | `org_invite` | — |
 | `marketing_consent` | off | `authenticate_turnkey` | — |
 | `password_change` | off | — | — |
 | `step_up` | off | — | — |
@@ -76,10 +77,28 @@ It covers plugin version 0.1.0-rc.24.
 | `oauth_server` | off | `api_token`, `authenticate_turnkey` | — |
 | `membership_kinds` | off | `org_membership` | — |
 | `org_packages` | off | `org_membership` | — |
+| `org_hosts` | off | `org_membership` | — |
+| `org_two_factor_policy` | off | `two_factor`, `org_membership` | — |
+| `org_email_proof_policy` | off | `email_verification`, `org_membership` | — |
+| `two_factor_enrolment` | off | `two_factor` | — |
+| `org_signup` | off | `org_hosts`, `rbac` | — |
+| `product_roles` | off | `org_membership` | — |
+| `product_plans` | off | `product_roles` | — |
+| `named_product_plans` | off | `product_plans` | — |
 
 `go_files_combined`: `service_account_org.go` (`service_account` +
 `org_membership`), `oauth_server_org.go` (`oauth_server` + `org_membership`),
-`membership_kinds_invite.go` (`membership_kinds` + `org_invite`).
+`membership_kinds_invite.go` (`membership_kinds` + `org_invite`),
+`org_invite_at_signup_confirm.go` (`invite_accept_at_signup` +
+`sign_up_confirmation`), `product_roles_invite.go` (`product_roles` +
+`org_invite`), `product_roles_signup.go` (`product_roles` + `org_signup`),
+`product_roles_token.go` (`product_roles` + `api_token`),
+`oauth_server_kinds.go` (`oauth_server` + `membership_kinds`),
+`signup_confirm_org.go` (`sign_up_confirmation` + `org_signup`),
+`admin_lockout_rbac.go` (`user_admin` + `rbac`).
+
+The table is the manifest's `features:` list (`plugin.yaml`); `tenant_scope`
+was retired in rc.57 and is not a feature any more.
 
 ## Verified findings
 
@@ -1029,7 +1048,7 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 
 **Adds**
 - Table `OrgProductAllowance` (org_id, product, role_key — `''` = the whole product, allowed_by/at, ended_by/at, ended_key).
-- Business: `ListOrgProductPlan`, `AllowOrgProduct`, `DisallowOrgProduct` (realm-wide only; `GET` / `PUT /auth/admin/orgs/{org_id}/product-plan`, `POST …/product-plan/remove`); `ListMyOrgProductPlan` (`GET /auth/orgs/{org}/product-plan`).
+- Business: `ListOrgProductPlan`, `AllowOrgProduct`, `DisallowOrgProduct` (realm-wide only; `GET` / `PUT /auth/admin/orgs/{org_id}/product-plan`, `POST …/product-plan/remove`); `DisallowOrgProducts` (realm-wide only: lines picked by their row ids, the shape an admin row action sends, where `DisallowOrgProduct`'s (org, product, role) key is one a page cannot stamp); `ListMyOrgProductPlan` (`GET /auth/orgs/{org}/product-plan`).
 - Errors `PRODUCT_ROLE_NOT_IN_PLAN` (412), `PRODUCT_PLANS_REALM_ONLY` (403).
 
 **Requires / conflicts / combined files.** Requires `product_roles`. Go file: `handlers/product_plans.go` (a `productRoleBounds` entry).
@@ -1039,6 +1058,7 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | product_plans/bounds | A product role held in an organization MUST count only while the organization's plan carries it (the role, or the whole product), on every request; an organization with no line for a product MUST hold nothing there; realm-wide grants MUST NOT be bounded. | Security | `TestAnswerProductRoles`, `TestProductPlanLines`; live: `examples/product-roles-proof` |
 | product_plans/no-grant-outside | Nobody MUST be able to hand out a role the plan does not carry. | Security | `TestAssignOrgProductRole`, `TestBackofficeProductRoles` |
 | product_plans/realm-only | Lines MUST be given and taken realm-wide only, where the endpoint ACL gates the method. | Security | `TestProductPlanLines` |
+| product_plans/bulk-by-id | `DisallowOrgProducts` MUST be realm-wide only and ACL-gated like `DisallowOrgProduct`; it MUST end each picked line under that line's organization's lock, and skip an id that is not a live line or was ended since it was read. | Security | `TestDisallowOrgProducts_EndsTheLinesPickedByID` |
 
 ### named_product_plans
 
@@ -1413,6 +1433,28 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 7. **Decided: `POST /auth/invites/accept` has no `public_limit`.** The gateway rate-limits per address only an `exclude_auth` endpoint; this one needs an account, and the token is 256-bit random.
 8. **Decided: expiry mixes clocks.** `expires_at` is written from the application's clock and compared with the database's `NOW()`, as for every token of this plugin: the DQL has no interval arithmetic. Skew shortens or lengthens the TTL by the skew.
 
+### backoffice_invites
+
+**Purpose.** The backoffice manages invitations in every organization — its operators are usually members of none. It invites into an organization it names, and withdraws invitations picked from the realm-wide list, whatever organizations they are in.
+
+**Adds**
+- Business RPCs: `InviteToOrgAdmin` (an `InviteToOrgReq` whose `org` names the organization by its slug), `RevokeOrgInvites` (invitation ids, any organizations).
+- Query: `ListOrgInvitesAdmin` (every organization's pending invitations, the organization's name beside its id).
+- REST: `POST /auth/admin/invites`, `POST /auth/admin/invites/withdraw`. Bearer token; neither is `public` or `failed_only`.
+- Admin page `OrgInvites`: the list, an "Invite to an organization" action with an organization picker that shows the link once, and "Withdraw" over picked rows.
+
+**Requires / conflicts / combined files.** Requires `org_invite`. Go file: `handlers/org_invite_backoffice.go`. `InviteToOrgAdmin` runs `org_invite`'s own path (`inviteInto`): the role ceiling and its snapshot, the kind rule (`membership_kinds`), the one-pending-per-address and already-a-member rules, the product roles (`product_roles`). They are methods of their own rather than a mode of `InviteToOrg` because a project's default role commonly grants `AuthService.*` to every account: a realm path through `InviteToOrg` would let anyone invite themselves into any organization. Exclude these two from such a role, as the plan methods are.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| backoffice_invites/realm-only-acl-gated | `InviteToOrgAdmin` and `RevokeOrgInvites` MUST act realm-wide: from inside an organization only for a caller holding the method realm-wide, and only when the endpoint ACL gates the method (it is in the lock); otherwise PermissionDenied with nothing written or closed. | Security | `TestInviteToOrgAdmin_TheBackofficeInvitesIntoTheNamedOrganization`, `TestRevokeOrgInvites_TheBackofficeWithdrawsAcrossOrganizations` |
+| backoffice_invites/named-organization | `InviteToOrgAdmin` MUST invite into the live organization its request names by slug (NotFound for none, InvalidArgument for no name), under that organization's lock, and MUST store the invitation there; `InviteToOrg` MUST stay in the active organization whatever `org` says. | Security | `TestInviteToOrgAdmin_TheBackofficeInvitesIntoTheNamedOrganization`, `TestInviteToOrg_StaysInTheActiveOrganization` |
+| backoffice_invites/ceiling | `InviteToOrgAdmin` MUST refuse a role above the caller's ceiling (`ROLE_ABOVE_CALLER`), as `InviteToOrg` does. `RevokeOrgInvites` MUST hold every named invitation to the ceiling in its own organization before it closes any: one above the caller refuses the whole call (`INVITE_ABOVE_CALLER`) with nothing closed. | Security | `TestBackofficeInvites_HeldToTheRoleCeiling` |
+| backoffice_invites/withdraw-in-place | `RevokeOrgInvites` MUST close each invitation in its own organization (`org_id` in the statement), recording the operator, never delete it; an id no longer pending, or closed since it was read, MUST be skipped. | Consistency & concurrency | `TestRevokeOrgInvites_TheBackofficeWithdrawsAcrossOrganizations` |
+
+**Gaps / suspected defects**
+1. `RevokeOrgInvites` closes each invitation in its own statement, not in one transaction: a failure part way leaves the earlier ones closed. Running it again closes the rest (closed ones are skipped).
+
 ### invite_accept_at_signup
 
 **Purpose.** A registration through an invitation's link joins at once: the person arrives a member with the invited role, without a second call.
@@ -1466,25 +1508,26 @@ Abbreviations: **rb** rbac, **at** authenticate_turnkey, **su** sign_up_turnkey,
 Cell codes (row × column, upper triangle; the relation is symmetric unless the code says which side):
 **R** one requires the other (plugin.yaml) · **X** conflicts_with · **C** combined go_files · **H** one overrides or extends the other's seam/hook · **T** shared table or column (one writes or deletes what the other reads) · **Q** shared query/RPC or shared helper · **O** ordering constraint inside one request · **G** one feature's gate applies on the other's path · **·** no interaction found.
 
-|    | rb | at | su | sc | si | ts | ap | dv | oa | tf | pr | ev | cl | om | oi | pc | sa | ua |
-|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|
-| **rb** | — | R Q | H O | H | · | Q | T Q | · | H | · | · | · | · | R T Q | R T | · | R T | T |
-| **at** | | — | · | · | · | H | H | Q | · | · | · | · | G | R H | · | Q | R H | G |
-| **su** | | | — | R H | · | R H | · | T | G | · | · | · | · | · | H G | · | · | · |
-| **sc** | | | | — | · | C | · | T | G | · | · | H | · | · | G O | · | · | · |
-| **si** | | | | | — | · | · | R H | · | R H O | · | · | · | · | · | · | H O | H O |
-| **ts** | | | | | | — | · | · | X | · | · | · | · | H | · | · | C | · |
-| **ap** | | | | | | | — | Q T | · | · | T | · | G | H O | · | T | R Q | T |
-| **dv** | | | | | | | | — | H | H R* | T | · | T | · | · | T | · | T |
-| **oa** | | | | | | | | | — | O | · | R T | · | · | G | · | G | G T |
-| **tf** | | | | | | | | | | — | O | · | O | · | · | O | G | G |
-| **pr** | | | | | | | | | | | — | · | · | · | · | T | G | G |
-| **ev** | | | | | | | | | | | | — | · | · | H G | · | · | T |
-| **cl** | | | | | | | | | | | | | — | · | · | · | G | G |
-| **om** | | | | | | | | | | | | | | — | R T | · | C | T |
-| **oi** | | | | | | | | | | | | | | | — | · | · | T |
-| **pc** | | | | | | | | | | | | | | | | — | G | · |
-| **sa** | | | | | | | | | | | | | | | | | — | R T |
+|    | rb | at | su | sc | si | ap | dv | oa | tf | pr | ev | cl | om | oi | pc | sa | ua |
+|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|
+| **rb** | — | R Q | H O | H | · | T Q | · | H | · | · | · | · | R T Q | R T | · | R T | T |
+| **at** | | — | · | · | · | H | Q | · | · | · | · | G | R H | · | Q | R H | G |
+| **su** | | | — | R H | · | · | T | G | · | · | · | · | · | H G | · | · | · |
+| **sc** | | | | — | · | · | T | G | · | · | H | · | · | G O | · | · | · |
+| **si** | | | | | — | · | R H | · | R H O | · | · | · | · | · | · | H O | H O |
+| **ap** | | | | | | — | Q T | · | · | T | · | G | H O | · | T | R Q | T |
+| **dv** | | | | | | | — | H | H R* | T | · | T | · | · | T | · | T |
+| **oa** | | | | | | | | — | O | · | R T | · | · | G | · | G | G T |
+| **tf** | | | | | | | | | — | O | · | O | · | · | O | G | G |
+| **pr** | | | | | | | | | | — | · | · | · | · | T | G | G |
+| **ev** | | | | | | | | | | | — | · | · | H G | · | · | T |
+| **cl** | | | | | | | | | | | | — | · | · | · | G | G |
+| **om** | | | | | | | | | | | | | — | R T | · | C | T |
+| **oi** | | | | | | | | | | | | | | — | · | · | T |
+| **pc** | | | | | | | | | | | | | | | — | G | · |
+| **sa** | | | | | | | | | | | | | | | | — | R T |
+
+`tenant_scope` (**ts**) was retired in rc.57 and its column and row are gone. The matrix covers the features above; those added since (`org_hosts` … `named_product_plans`, `backoffice_invites`, `teams`, `bot_roles`, `org_roles`, `membership_kinds`, `org_packages`, `oauth_server`) state their interactions in their own sections and in the interaction tables below.
 
 `admin_sign_ins` and `admin_devices` are left out of the matrix: each gates one admin page and requires `user_admin` (**R** with **ua**), and touches nothing else.
 
@@ -1547,6 +1590,7 @@ Proof column: exact unit-test names in `auth/src/handlers`, or `none`. A unit te
 | `interaction/password_reset-sweep-outside-tx` | pr ap dv | O | The password write and the token sweep are **not** one unit of work: the sweep runs after commit, so a reset can succeed while an attacker's sessions survive. ChangePassword puts both in one transaction; ResetPassword should do the same. | TestResetPassword_ReportsWhenTheSessionSweepDidNotRun (documents the split) |
 | `interaction/credential-change-device-trust` | pr pc ua | Q: `UpdateUserPasswordIfUnchanged` (pc) and `DisableUsers` (ua) write `device_trust_revoked_at = NOW()` in every activation; `mintDevice` and `ListDevices` compare it with `Device.trusted_at`. | A password change or a disable ends the trust of every device of the account in its own statement; under `new_devices` each of them, the changing caller's included, passes the second factor again. A reset keeps trust by design: the reset link proved the mailbox, which is treated as the second factor. RevokeDevice/Other/All end trust per device for good. | `TestChangePassword_RevokesDeviceTrustInTheSameStatement`, `TestDisableUsers_RevokesDeviceTrustInTheSameStatement`, `TestMintDevice_TrustRevokedByACredentialChange_NotTrusted`, `TestSignIn_DoesNotRenewRevokedDeviceTrust`, `TestListDevices_TrustRevokedByACredentialChange_NotShownTrusted` |
 | `interaction/service_account-api_token-realm` | sa ap rb | R Q | A machine account holds only API-realm roles (CreateBot refuses a session-realm role). Its tokens go through `issueApiTokenTx` and `apiTokenExpiry`, the same paths as a person's API token. | TestCreateBot_RefusesARoleFromTheSessionRealm, TestCreateBot_AcceptsAnApiRealmRoleAndGrantsIt, TestIssueBotToken_MintsForABot, TestIssueBotToken_RefusesAPerson |
+| `interaction/backoffice_invites-org_invite` | oi (backoffice_invites) | Q: `InviteToOrgAdmin` resolves the organization by slug and then runs `inviteInto`, `InviteToOrg`'s path; `RevokeOrgInvites` uses `inviteRoleCeiling` and `CloseOrgInvite`, `RevokeOrgInvite`'s. | Every rule of an invitation (ceiling and snapshot, kinds, one pending per address, already a member, product roles, acceptance) holds for one the backoffice made, because it is made by the same path; only who may call it and in which organization differ. | TestInviteToOrgAdmin_TheBackofficeInvitesIntoTheNamedOrganization, TestBackofficeInvites_HeldToTheRoleCeiling |
 | `interaction/role-ceiling-shared` | om oi sa rb at | Q: `role_ceiling.go` reads the caller's resolved permissions from the AuthResp envelope and the role catalogue. | Granting a role (invite, membership role change, membership removal, bot creation, bot token, an open registration policy's role) requires the caller to hold every permission the role carries. With no envelope, the request is refused; code acting for a person stamps `ResolveUser`'s answer as the envelope (`principal.ActAs`), so the ceiling judges that person. An invitation snapshots the role (a wildcard one as `*`), and acceptance is refused if the role has widened since. | TestRoleWithinCeiling, TestInviteToOrg_RefusesARoleAboveTheInviter, TestCreateBot_RefusesARoleAboveTheOperator, TestIssueBotToken_RefusesABotAboveTheOperator, TestUpdateOrgMembershipRole_RefusesARoleAboveTheCaller, TestMembership_TheMemberAboveTheCallerIsNotTheirsToChange, TestCheckMayGrantRole_NoEnvelopeFailsClosed, TestAcceptOrgInvite_RefusesARoleWidenedSinceTheInvitation, TestResolveUser_TheCeilingJudgesThePersonActedFor, TestSetOrgSignUpPolicy_HoldsTheRoleToTheCallersCeiling |
 | `interaction/org_invite-org_membership-rbac-accept-writes-both` | oi om rb | R T: AcceptOrgInvite writes OrgMembership and an org-scoped UserRole in one transaction. | An accepted invitation always produces both rows or neither. Only org-scoped roles may be invited. Removing a membership revokes the member's UserRoles in that org in the same unit of work. | TestRoleIDByName_RefusesARealmRole, TestAcceptOrgInvite_BoundRecordsDerivedAndOpenDoesNot (rollback on a real store: none) |
 | `interaction/service_account-org_membership-scoping` | sa om | C: `service_account_org.go` installs `botOrgs`. | With organizations, a bot is created as a member of the operator's active org with its role scoped there. Bots are listed and minted for only inside that org. A build that has org_membership but lacks the combined file refuses rather than serving every organization's bots. | TestCreateBot_JoinsTheOrgAndScopesTheGrantToIt, TestCreateBot_RefusesWithNoActiveOrg, TestListBots_AsksOnlyForTheActiveOrganization, TestIssueBotToken_RefusesABotFromAnotherOrganization, TestMachineAccounts_OrgsWithoutTheirScopingRefuse |
