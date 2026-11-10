@@ -609,9 +609,16 @@ func (h *PaymentServiceHandler) inLockedTx(ctx context.Context, lock func(txCtx 
 	}
 	work, cancel := context.WithTimeout(ctx, refundLockTimeout-lockedWorkMargin)
 	defer cancel()
+	// READ COMMITTED, asked for rather than inherited: the guards read what
+	// the previous lock holder committed after the lock is granted. Under the
+	// connection's default — REPEATABLE READ when a project sets
+	// default_transaction_isolation so — the snapshot is taken by the lock
+	// statement BEFORE it waits, and the refunded sum would miss the refund
+	// the previous holder recorded.
 	tx, txCtx, err := distx.Begin(work, h.DistTx, &distxpb.BeginRequest{
 		ConnectionName: h.Connection,
 		TxTimeoutMs:    int32(refundLockTimeout / time.Millisecond),
+		Isolation:      distxpb.Isolation_READ_COMMITTED,
 	})
 	if err != nil {
 		return err

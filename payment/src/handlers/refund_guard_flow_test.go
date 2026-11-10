@@ -13,6 +13,7 @@ import (
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 	"github.com/wandering-compiler/plugins/payment/lib/backend"
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 )
 
 // The refund guard (base/refund-within-captured, base/refund-only-succeeded)
@@ -361,4 +362,33 @@ func TestFlow_ConcurrentTopUpRefunds_TheSecondSeesTheFirstsTakeBack(t *testing.T
 		t.Errorf("balance = %d, want 1.0000 (10 granted, 4 spent, 5 refunded)", got)
 	}
 	wantNoLocksLeft(t, r)
+}
+
+// The guards under a row lock read what the previous holder committed AFTER
+// the lock is granted (the refunded sum, the open subscription). That holds
+// only under READ COMMITTED: under REPEATABLE READ the snapshot is taken by
+// the lock statement before it waits, and the sum misses the refund the
+// previous holder recorded. A connection's default isolation is the
+// project's setting, so every transaction the plugin opens asks for READ
+// COMMITTED itself.
+func TestInLockedTx_AsksForReadCommitted(t *testing.T) {
+	r := subRig(t)
+	p := r.paid("user-a", 100000, "k")
+	if _, err := refund(r, p.GetId(), 10000, "r1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := subscribe(r, "pro", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	d := r.h.DistTx.(*fakeDistTx)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.isolations) < 2 {
+		t.Fatalf("%d transactions begun, want one per refund and per subscribe", len(d.isolations))
+	}
+	for i, iso := range d.isolations {
+		if iso != distxpb.Isolation_READ_COMMITTED {
+			t.Errorf("transaction %d asked for %v, want READ_COMMITTED", i, iso)
+		}
+	}
 }
