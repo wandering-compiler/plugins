@@ -239,6 +239,8 @@ type ledger struct {
 	// beforeConsentWrite runs once, inside the next SetContactConsent, before
 	// it writes: another delivery landing in between.
 	beforeConsentWrite func()
+	// recordFails: how many more times recording each sent id fails.
+	recordFails map[string]int
 }
 
 func (l *ledger) RecordActivity(_ context.Context, in *pb.ActivityReq, _ ...grpc.CallOption) (*pb.ActivityWriteResp, error) {
@@ -309,6 +311,10 @@ func (l *ledger) ListSentEvents(_ context.Context, in *pb.ListSentEventsReq, _ .
 }
 
 func (l *ledger) RecordSentEvent(_ context.Context, in *pb.RecordSentEventReq, _ ...grpc.CallOption) (*pb.RecordSentEventResp, error) {
+	if l.recordFails[in.GetId()] > 0 {
+		l.recordFails[in.GetId()]--
+		return nil, status.Error(codes.Unavailable, "table hiccup")
+	}
 	if l.sent[in.GetId()] {
 		st, _ := status.New(codes.InvalidArgument, "duplicate").WithDetails(&w17pb.ErrorDetail{Code: "UNIQUE_VIOLATION"})
 		return nil, st.Err()
@@ -897,5 +903,37 @@ func TestContacts_ARefusedContactWriteIsReported(t *testing.T) {
 	}
 	if len(reported) != 0 {
 		t.Errorf("a transient failure (redelivered) was reported as a lost write: %v", reported)
+	}
+}
+
+// Recording one sent record failing does not resend the rest of its chunk:
+// every record Brevo answered for is recorded, a failed record is tried
+// again at once, and only one that still fails is left for the redelivery —
+// which then sends it alone, not what came after it in the chunk.
+func TestConsumeMarketing_AFailedRecordResendsOnlyItself(t *testing.T) {
+	f, l := &fakeBrevo{}, &ledger{sent: map[string]bool{}, recordFails: map[string]int{"02": 1}}
+	tl := tool(t, f, l, "all", "", "")
+	b := batch(record(1, createTask, "u1"), record(2, createTask, "u1"), record(3, createTask, "u1"))
+	if err := tl.ConsumeMarketing(context.Background(), b); err != nil {
+		t.Fatalf("a record that failed once and then landed: %v", err)
+	}
+	if len(f.batches) != 1 || !l.sent["01"] || !l.sent["02"] || !l.sent["03"] {
+		t.Fatalf("batches %d, sent %v; want one batch and all three recorded", len(f.batches), l.sent)
+	}
+
+	f, l = &fakeBrevo{}, &ledger{sent: map[string]bool{}, recordFails: map[string]int{"02": 1000}}
+	tl = tool(t, f, l, "all", "", "")
+	if err := tl.ConsumeMarketing(context.Background(), b); err == nil {
+		t.Fatal("a record that cannot be recorded returned nil — it would be resent with no error")
+	}
+	if !l.sent["01"] || !l.sent["03"] || l.sent["02"] {
+		t.Fatalf("sent = %v; want 01 and 03 recorded although 02 failed", l.sent)
+	}
+	l.recordFails = nil
+	if err := tl.ConsumeMarketing(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.batches) != 2 || len(f.batches[1]) != 1 {
+		t.Errorf("the redelivery sent %d batches, the last of %d events; want the one unrecorded event alone", len(f.batches), len(f.batches[len(f.batches)-1]))
 	}
 }
