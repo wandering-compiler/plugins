@@ -1,5 +1,7 @@
 package handlers
 
+import "context"
+
 // orgMembershipStaged is set by org_membership.go's init: this build has
 // organizations.
 //
@@ -21,3 +23,40 @@ var orgMembershipStaged bool
 // prefix before the lookup like any other — no row of such a build can pass,
 // so it costs no query. In no feature's go_files, like orgMembershipStaged.
 var serviceAccountStaged bool
+
+// The two below are here, in no feature's go_files, for the reason the marks
+// above are: features that are staged independently of each other call them
+// (org_invite, org_signup, oauth_server, membership_kinds) and one installs them
+// (org_suspension).
+
+// orgEntryCheck refuses a way INTO an organization — accepting an invitation,
+// registering on its host, an OAuth grant consented for it — that the
+// organization's state forbids (org_suspension). Nil when no feature checks.
+var orgEntryCheck func(ctx context.Context, h *AuthServiceHandler, orgID string) error
+
+// checkOrgEntry runs orgEntryCheck when a feature installed one.
+func checkOrgEntry(ctx context.Context, h *AuthServiceHandler, orgID string) error {
+	if orgEntryCheck == nil {
+		return nil
+	}
+	return orgEntryCheck(ctx, h, orgID)
+}
+
+// orgInferredKey is the request memo's mark that the organization was
+// inferred — the caller's only one — rather than named by the request.
+const orgInferredKey = "org_inferred"
+
+// markOrgInferred records that the stamped organization is the caller's only
+// one, chosen for them: a check that would refuse it (a suspended one) drops it
+// instead, and the request goes on in no organization.
+func markOrgInferred(ctx context.Context) {
+	if m := requestMemoOf(ctx); m != nil {
+		m[orgInferredKey] = true
+	}
+}
+
+// orgWasInferred reports markOrgInferred for this request.
+func orgWasInferred(ctx context.Context) bool {
+	v, _ := requestMemoOf(ctx)[orgInferredKey].(bool)
+	return v
+}

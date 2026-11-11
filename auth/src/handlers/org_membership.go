@@ -400,38 +400,6 @@ var membershipKindOf = func(*pb.UserOrg) string { return "" }
 // kinds are staged (membership_kinds.go); nil without them.
 var orgScopeByKind func(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error
 
-// orgEntryCheck refuses a way INTO an organization — accepting an invitation,
-// registering on its host, an OAuth grant consented for it — that the
-// organization's state forbids (org_suspension). Nil when no feature checks.
-var orgEntryCheck func(ctx context.Context, h *AuthServiceHandler, orgID string) error
-
-// checkOrgEntry runs orgEntryCheck when a feature installed one.
-func checkOrgEntry(ctx context.Context, h *AuthServiceHandler, orgID string) error {
-	if orgEntryCheck == nil {
-		return nil
-	}
-	return orgEntryCheck(ctx, h, orgID)
-}
-
-// orgInferredKey is the request memo's mark that the organization was
-// inferred — the caller's only one — rather than named by the request.
-const orgInferredKey = "org_inferred"
-
-// markOrgInferred records that the stamped organization is the caller's only
-// one, chosen for them: a check that would refuse it (a suspended one) drops it
-// instead, and the request goes on in no organization.
-func markOrgInferred(ctx context.Context) {
-	if m := requestMemoOf(ctx); m != nil {
-		m[orgInferredKey] = true
-	}
-}
-
-// orgWasInferred reports markOrgInferred for this request.
-func orgWasInferred(ctx context.Context) bool {
-	v, _ := requestMemoOf(ctx)[orgInferredKey].(bool)
-	return v
-}
-
 // The keys an audience gateway writes for the organization's sources and the host
 // (principal.OrgFromKey / principal.HostKey and the OrgFrom* values of
 // the SDK that ships org_from), spelled here so the plugin builds against
