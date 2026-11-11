@@ -22,7 +22,7 @@ auth plugin's `org_packages` feature, which enforces them on every request.
 |---|---|---|
 | `ProposeEnvelope`, `GetMyEnvelopes` | a member, acting in the organization | `POST` / `GET /grant/orgs/{org}/envelopes` |
 | `ListEnvelopeProposals`, `ApproveEnvelope`, `RejectEnvelope` | the backoffice, realm-wide | `GET /grant/admin/envelopes`, `POST …/{id}/approve`, `POST …/{id}/reject` |
-| `GetOrgEnvelope` | anyone (unauthenticated, limited per address) | `GET /grant/envelopes/orgs/{org_id}` |
+| `GetOrgEnvelope` | anyone (unauthenticated, not limited per address: `public_limit: none`) | `GET /grant/envelopes/orgs/{org_id}` |
 
 Which members and which operators may call a method is the project's endpoint
 ACL.

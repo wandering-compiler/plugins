@@ -25,9 +25,11 @@ It covers plugin version 0.1.0-rc.58 and the unreleased changes in `changes/`.
   **unit (mock) only** and name what a live test would have to show. `none`
   means nothing proves it yet.
 - **public** means the REST preset endpoint takes no credential
-  (`exclude_auth`). **failed_only** means the gateway's per-address limiter
-  charges such an endpoint only for a failed request; a public endpoint
-  without it is charged for every request.
+  (`exclude_auth`). Every public endpoint declares its `public_limit`, and
+  each limited one has its own bucket per client address. **failed_only**
+  means the gateway charges it only for a failed request (30 a minute, burst
+  10, unless it declares `public_rate`); **every_request** charges every
+  request, at the endpoint's `public_rate`; **none** is not limited.
 - **Gaps / suspected defects** after each feature are what the code does not
   enforce although the invariant requires it, found by reading the code. The
   ones re-checked against the code are collected under
@@ -334,7 +336,7 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 | `sign_up_turnkey/atomic-registration` | The user row, its role links, an open-invitation claim and the first token MUST commit together or not at all. | Consistency & concurrency | none (no transaction-fake test for SignUp) |
 | `sign_up_turnkey/taken-address-answer` | A taken address MUST be refused with `AlreadyExists` / `EMAIL_TAKEN`, derived from the unique index. | Consistency & concurrency | `TestSignUp_ATakenAddressSaysSignInInstead`. **Unit (mock) only:** see `base/email-unique`. |
 | `sign_up_turnkey/session-ttl` | The token SignUp mints MUST carry the session TTL. | Security | none (SignUp's own mint is untested; `TestIssueSession_StampsExpiry` covers the SignIn path) |
-| `sign_up_turnkey/every-request-limited` | Every SignUp request MUST be charged to the gateway's per-address limiter. | Performance | none (manifest only) |
+| `sign_up_turnkey/every-request-limited` | Every SignUp request MUST be charged to the gateway's per-address limiter, its own bucket at 20 a minute (burst 20: a room signing up together). | Performance | none (manifest only) |
 
 **Gaps / suspected defects**
 
@@ -881,7 +883,7 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 **Adds**
 - Table `OrgHost` (host, org_id, bound_by/at, ended_by/at, ended_key): one live binding per host; unbinding ends the row; nothing is deleted.
 - Queries `GetOrgOfHost`, `ListOrgHostRows` (live organizations only); mutations `BindOrgHostRow`, `EndOrgHostRow`.
-- Business: `BindOrgHost`, `UnbindOrgHost`, `ListOrgHosts` (realm-wide only; `PUT` / `DELETE /auth/admin/hosts/{host}`, `GET /auth/admin/hosts`), `GetHostOrg` (anyone; `GET /auth/hosts/{host}`, limited per address).
+- Business: `BindOrgHost`, `UnbindOrgHost`, `ListOrgHosts` (realm-wide only; `PUT` / `DELETE /auth/admin/hosts/{host}`, `GET /auth/admin/hosts`), `GetHostOrg` (anyone; `GET /auth/hosts/{host}`, not limited: every page of a white-label site reads it, and a host is public in DNS).
 - Errors `HOSTS_REALM_ONLY` (403), `HOST_TAKEN` (400), `HOST_INVALID` (400); through an audience, `ORG_HOST_CONFLICT` (403) and `ORG_SELECTOR_NOT_ACCEPTED` (403) — see `org_membership/org-from`.
 
 **Requires / conflicts / combined files.** Requires `org_membership`. Go file: `handlers/org_hosts.go`.
@@ -1772,7 +1774,7 @@ A unit test against a fake store cannot prove the invariants below. An example p
 3. **Transactions roll back on a real store**: inject a failure after the first write for SignUp, ConfirmSignUp, AcceptOrgInvite, CreateBot, CreateApiToken (subset), MFA issuance and ChangePassword; assert that no partial row exists and that no event was emitted.
 4. **Revocation completeness**: after DisableUsers, every token class of the account (session, device-bound, CLI, API, bot) gets 401 on its next request, and its row is still there with `revoked_at`, `revoke_reason` and `revoked_by`. After an erasure, the same, plus the table-by-table state of `user_admin/erasure-keeps-every-row`, and a new sign-up with the old address. After ResetPassword, sessions and API tokens get 401. After ChangePassword, other sessions get 401 while the calling session and API tokens still work. IssueBotToken for a disabled bot must be refused (`interaction/user_admin-service_account-disabled-bot-token`).
 5. **Expiry in SQL**: a token or code whose `expires_at` has passed is refused by Authenticate, VerifyMfa, ConfirmSignUp, ResetPassword, VerifyEmail, CliToken and AcceptOrgInvite.
-6. **Gateway rate limit**: on one client address, with the limit on, `failed_only` endpoints allow unlimited correct answers and answer 429 after the burst of wrong ones. SignUp, RequestPasswordReset and OAuthAuthorizeURL answer 429 after the burst even when every request succeeds (`auth/public-limit-modes`).
+6. **Gateway rate limit**: on one client address, with the limit on, `failed_only` endpoints allow unlimited correct answers and answer 429 after the burst of wrong ones. SignUp (20 a minute), RequestPasswordReset (10) and OAuthAuthorizeURL (60) answer 429 after their own burst even when every request succeeds, each without spending another's budget; GetHostOrg is never refused (`auth/public-limit-modes`).
 7. **Events on the bus**: the four secret carriers arrive only for committed writes and only on the internal channel. No client-visible event stream ever shows them. No event payload contains a bearer token (scan every payload for the issued token string) (`auth/events-*`).
 8. **Forwarded headers reach the handler**: `User-Agent` / `X-Forwarded-For` (device label), the gateway's `x-w17-dpop-jkt` on every mint and Authenticate (device binding: a mint without it and a request whose proof is by another key must be refused end to end), and `W17-Org` header or path (om). Each feature depends on the gateway propagating its header, and the handler-level tests inject it directly.
 9. **Cross-feature flows**: the second factor under `new_devices` for one device key, then the same key after an OAuth sign-in (`interaction/oauth-devices-two_factor-trust-laundering`), and after a password change and after a disable and re-enable (`interaction/credential-change-device-trust`); one key signing in to two accounts (`device/trust-per-user-device`); a revoked device's key refused at sign-in and on every request (`device/revoked-refused-for-good`); an API token driving CliAuthorize → CliToken (`interaction/api_token-cli_login-realm-escalation`, must be refused) and a session approving a CLI login whose session then approves the next (`cli_login/no-lifetime-extension`, every link ends with the first session); an org-scoped API token whose permission is granted only by a realm-wide session role (must not survive); an OAuth link into an unverified and into a verified local account.
