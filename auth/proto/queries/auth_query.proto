@@ -437,6 +437,17 @@ message ListOrgSuperadminsResp {
 // then checks the last-superadmin rule and writes the change. Every such
 // change takes the same lock, so two of them in one organization run one after
 // the other and the second one's check sees what the first one ended.
+// GetOrgSuspension — whether an organization is suspended (org_suspension).
+message GetOrgSuspensionReq {
+  option (w17.contrib.plugin_feature) = "org_suspension";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message GetOrgSuspensionResp {
+  option (w17.contrib.plugin_feature) = "org_suspension";
+  string org_id = 1;
+  google.protobuf.Timestamp suspended_at = 2;
+}
+
 message LockOrganizationReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -2772,6 +2783,20 @@ service AuthQuery {
         dql:
           "SELECT COUNT(*) AS count FROM @module.UserRole ur "
           "WHERE ur.role_id = :role_id AND ur.revoked_at IS NULL"
+      }
+    };
+  }
+
+  // GetOrgSuspension — the organization's suspended_at, read by Authenticate
+  // for the organization a request was resolved to (org_suspension.go). Live
+  // organizations only, as every organization reader: a deleted one is never
+  // selected, and its row answers NotFound.
+  rpc GetOrgSuspension(GetOrgSuspensionReq) returns (GetOrgSuspensionResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_suspension";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT o.id AS org_id, o.suspended_at AS suspended_at FROM @module.Organization o WHERE o.id = :org_id AND o.deleted_at IS NULL"
       }
     };
   }

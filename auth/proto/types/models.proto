@@ -1907,6 +1907,17 @@ message Organization {
   google.protobuf.Timestamp deleted_at = 7 [(w17.field) = { type: DATETIME, null: true }];
   // ended_key — '' while live, the row's own id once deleted (Role.ended_key).
   string ended_key = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+  // suspended_at — when the operators of the realm suspended the organization
+  // (an incident, a leak). NULL = not suspended. While it is set, no request
+  // acts in the organization: Authenticate refuses every principal the
+  // organization would be selected for — its people, its machine accounts,
+  // their tokens — with ORG_SUSPENDED (handlers/org_suspension.go). Nothing
+  // is deleted or revoked; clearing it restores everything as it was.
+  // Field-gated `org_suspension`.
+  google.protobuf.Timestamp suspended_at = 9 [
+    (w17.field) = { type: DATETIME, null: true },
+    (w17.contrib.plugin_feature_field) = "org_suspension"
+  ];
 }
 
 // OrgMembership is the M2M link between a User and an Organization, with

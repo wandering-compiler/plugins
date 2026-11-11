@@ -45,6 +45,9 @@ type authnError struct {
 	// UNAUTHENTICATED — a client that signs out on 401 must not sign out a
 	// valid session over an organization it named.
 	denied bool
+	// deniedMessage is a denied refusal's status message when it is not
+	// ORG_NOT_MEMBER's (DeniedOrgSuspended).
+	deniedMessage string
 }
 
 // orgNotMemberMessage is the status message of DeniedOrgNotMember: the same
@@ -59,6 +62,9 @@ const authnErrorMessage = "invalid credentials"
 // returned error AND the unwrapped cause.
 func (e *authnError) Error() string {
 	if e.denied {
+		if e.deniedMessage != "" {
+			return e.deniedMessage
+		}
 		return orgNotMemberMessage
 	}
 	return authnErrorMessage
@@ -92,7 +98,7 @@ func (e *authnError) GRPCStatus() *status.Status {
 			CodeAuthUnavailable, MsgAuthUnavailable)
 	}
 	if e.denied {
-		return withUserDetail(status.New(codes.PermissionDenied, orgNotMemberMessage), e.userCode, e.userMsg)
+		return withUserDetail(status.New(codes.PermissionDenied, e.Error()), e.userCode, e.userMsg)
 	}
 	st := status.New(codes.Unauthenticated, authnErrorMessage)
 	if e.userCode == "" {
@@ -138,6 +144,14 @@ const (
 	// sentence hides. It reveals nothing: an org that does not
 	// exist and one the caller is not in answer the same.
 	CodeOrgNotMember = "ORG_NOT_MEMBER"
+
+	// CodeOrgSuspended: the credential was accepted and the caller belongs to
+	// the organization the request acts in, but the realm's operators have
+	// suspended it (org_suspension). PERMISSION_DENIED, as ORG_NOT_MEMBER:
+	// the session is fine, and a client must not sign the person out over it.
+	// Said only to a member — the check runs after the membership was
+	// resolved — so it reveals nothing to anybody else.
+	CodeOrgSuspended = "ORG_SUSPENDED"
 
 	// CodeMfaCodeRefused: a second-factor code (an authenticator code, an
 	// emailed code, a recovery code) was refused — wrong, expired, already
@@ -424,6 +438,8 @@ const (
 	MsgOrgNotMember = "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
 
 	MsgOrgMismatch = "This request names two different organizations. Name one."
+
+	MsgOrgSuspended = "This organization is suspended by the operators of the service. Contact them to have it restored."
 
 	// About the CODE, and the same for every cause: naming the cause would
 	// tell a guesser which half of the attempt was wrong.
@@ -818,6 +834,14 @@ func UnauthenticatedMfaCode(cause error) error {
 // beside its caller because this file is staged with every feature.
 func DeniedOrgNotMember(cause error) error {
 	return &authnError{cause: cause, userCode: CodeOrgNotMember, userMsg: MsgOrgNotMember, denied: true}
+}
+
+// DeniedOrgSuspended is the ORG_SUSPENDED refusal (org_suspension.go): a
+// PERMISSION_DENIED, like DeniedOrgNotMember, because the credential was
+// accepted. Here because this file is staged with every feature.
+func DeniedOrgSuspended(cause error) error {
+	return &authnError{cause: cause, userCode: CodeOrgSuspended, userMsg: MsgOrgSuspended, denied: true,
+		deniedMessage: "the organization this request acts in is suspended"}
 }
 
 // refusal is a status whose message is the operator's copy and whose

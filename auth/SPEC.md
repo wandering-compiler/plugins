@@ -944,6 +944,22 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | org_email_proof_policy/acl-gated | Every floor method MUST be refused unless the endpoint ACL gates it; the backoffice's MUST be refused from inside an organization; the organization's MUST act in the active organization only. | Security | `TestSetOrgEmailProof`, `TestSetMyOrgEmailProof` |
 | org_email_proof_policy/values | A floor MUST be one of none, derived, full. | Correctness | `TestSetOrgEmailProof`, `TestSetMyOrgEmailProof` |
 
+
+### org_suspension
+
+**Purpose.** The realm's operators suspend a whole organization — an incident, a leak — and while it is suspended nothing acts in it. `Organization.suspended_at`, set and cleared by `AuthMutation.SuspendOrganizations` / `ResumeOrganizations` (bulk, by id; the project's endpoint ACL decides who calls them — in a console, the backoffice admin's Suspend / Resume actions).
+
+**Enforcement.** One read per request that acts in an organization, after every scope decorator has chosen it (`scopeChecks`): the W17-Org selector, the sole membership, an audience's kinds and an OAuth token's consent all end in the same check, for every principal — a person's session or API token, a machine account's bearer token. A suspended organization answers `PERMISSION_DENIED` / `ORG_SUSPENDED`, never `UNAUTHENTICATED`: the session is fine, and the person's other organizations work. A request in no organization (sign-in, listing one's own organizations, the admin plane) is not checked. A failed read refuses the request as an outage (`AUTH_UNAVAILABLE`), never lets it through. Nothing is revoked or deleted: resuming clears the stamp and every session and token works again.
+
+**Requires / conflicts / combined files.** Requires `org_membership`. Go file: `handlers/org_suspension.go`. Off by default; a migration adds the column.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| org_suspension/refused | A request resolved to a suspended organization MUST be refused `PermissionDenied` / `ORG_SUSPENDED`, with the suspension's own status message. | Security | TestOrgSuspension_ARequestInASuspendedOrganizationIsRefused |
+| org_suspension/only-that-organization | Only requests in the suspended organization MUST be refused; resuming MUST restore them with nothing else changed. | Security | TestOrgSuspension_OnlyTheSuspendedOrganizationIsStopped |
+| org_suspension/after-every-decorator | The check MUST see the organization whichever decorator chose it, including one that runs last. | Security | TestOrgSuspension_TheCheckRunsAfterEveryDecorator |
+| org_suspension/no-organization-no-read | A request in no organization MUST NOT read a suspension nor be refused by one. | Performance | TestOrgSuspension_NoOrganizationNoRead |
+| org_suspension/fails-closed | A failed read MUST refuse the request (an outage as `AUTH_UNAVAILABLE`), never pass it and never report a suspension. | Failure & configuration | TestOrgSuspension_AFailedReadIsAnOutageNotAPass |
 ### two_factor_enrolment
 
 **Purpose.** Enrolment at sign-in. Under `two_factor_policy=enrol` every account is challenged, and one without a confirmed authenticator sets it up at its next sign-in instead of getting a code by message. A project with no SMS/e-mail channel can then require a second factor without locking out the accounts that have none yet.
