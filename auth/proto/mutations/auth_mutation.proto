@@ -1288,6 +1288,23 @@ message EnableUsersReq {
 message EnableUsersResp {
   option (w17.contrib.plugin_feature) = "user_admin";
 }
+// Suspend/ResumeOrganizations — the backoffice's switch over whole
+// organizations (org_suspension). Bulk and fire-and-forget, as Disable/
+// EnableUsers: the admin renders only success or failure.
+message SuspendOrganizationsReq {
+  option (w17.contrib.plugin_feature) = "org_suspension";
+  repeated string ids = 1;
+}
+message SuspendOrganizationsResp {
+  option (w17.contrib.plugin_feature) = "org_suspension";
+}
+message ResumeOrganizationsReq {
+  option (w17.contrib.plugin_feature) = "org_suspension";
+  repeated string ids = 1;
+}
+message ResumeOrganizationsResp {
+  option (w17.contrib.plugin_feature) = "org_suspension";
+}
 // DisableUser / EnableUser — one account, for AuthService.DisableAccounts /
 // EnableAccounts, which check the operator against the last-admin rule and
 // emit an event per account.
@@ -4163,6 +4180,35 @@ service AuthMutation {
     };
   }
 
+  // SuspendOrganizations — stamp suspended_at on live organizations not yet
+  // suspended. From the next request on, Authenticate refuses every
+  // principal acting in them (ORG_SUSPENDED). Nothing is revoked: a session
+  // or a token of a member is refused while the stamp is there and works
+  // again once it is cleared. Gated org_suspension; the project's endpoint
+  // ACL decides who may call it (the console's backoffice operators).
+  rpc SuspendOrganizations(SuspendOrganizationsReq) returns (SuspendOrganizationsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_suspension";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:  "UPDATE @module.Organization SET suspended_at = NOW() "
+              "WHERE id IN (:ids) AND suspended_at IS NULL AND deleted_at IS NULL"
+      }
+    };
+  }
+
+  // ResumeOrganizations — clear suspended_at. Gated org_suspension.
+  rpc ResumeOrganizations(ResumeOrganizationsReq) returns (ResumeOrganizationsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_suspension";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:  "UPDATE @module.Organization SET suspended_at = NULL "
+              "WHERE id IN (:ids) AND suspended_at IS NOT NULL"
+      }
+    };
+  }
+
   // DisableUser — DisableUsers for ONE account, with its event: the account's
   // tokens are revoked (USER_DISABLED, the operator as revoked_by) and it is
   // disabled, in one unit of work. An account already disabled matches no row
@@ -5051,6 +5097,7 @@ service AuthMutation {
           "          kind AS organization.kind, "
           "          created_at AS organization.created_at, "
           "          deleted_at AS organization.deleted_at, "
+          "          ?feature(org_suspension) suspended_at AS organization.suspended_at, "
           "          ended_key AS organization.ended_key"
       }
     };

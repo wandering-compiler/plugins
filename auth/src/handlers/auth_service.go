@@ -440,6 +440,13 @@ type scopeDecorator func(ctx context.Context, h *AuthServiceHandler, userID stri
 
 var scopeDecorators []scopeDecorator
 
+// scopeChecks run after EVERY scope decorator, over the scope they settled —
+// a check on the organization a request acts in (org_suspension) must see
+// the organization whichever decorator chose it, which an append to
+// scopeDecorators would leave to the order the files' init functions run in.
+// They refuse; they never add a scope.
+var scopeChecks []scopeDecorator
+
 // notAdmittedError is a decorator's refusal of an AUTHENTICATED caller the
 // surface does not admit (membership_kinds: no membership of a kind the
 // audience accepts). It reaches the gateway as the PermissionDenied (403) it
@@ -1908,17 +1915,19 @@ func intersectInt32(a, b []int32) []int32 {
 // already said what kind of refusal it is (DeniedOrgNotMember) keeps
 // its words; wrapping it again would drop them back to the generic answer.
 func runScopeDecorators(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error {
-	for _, dec := range scopeDecorators {
-		if err := dec(ctx, h, userID, headers, scopes, labels); err != nil {
-			var classified *authnError
-			if errors.As(err, &classified) {
-				return classified
+	for _, decs := range [2][]scopeDecorator{scopeDecorators, scopeChecks} {
+		for _, dec := range decs {
+			if err := dec(ctx, h, userID, headers, scopes, labels); err != nil {
+				var classified *authnError
+				if errors.As(err, &classified) {
+					return classified
+				}
+				var refused *notAdmittedError
+				if errors.As(err, &refused) {
+					return refused
+				}
+				return Unauthenticated(err)
 			}
-			var refused *notAdmittedError
-			if errors.As(err, &refused) {
-				return refused
-			}
-			return Unauthenticated(err)
 		}
 	}
 	return nil

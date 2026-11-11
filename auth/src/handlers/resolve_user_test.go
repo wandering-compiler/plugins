@@ -50,9 +50,11 @@ func (m *resolveUserMock) GetUserRolePermissionsByRealm(_ context.Context, in *p
 // ones it installs, restoring the package's afterwards.
 func noFeatureSeams(t *testing.T, decorators ...scopeDecorator) {
 	t.Helper()
-	prevDec, prevNarrow, prevEnrich := scopeDecorators, grantNarrowers, authRespEnrichers
-	t.Cleanup(func() { scopeDecorators, grantNarrowers, authRespEnrichers = prevDec, prevNarrow, prevEnrich })
-	scopeDecorators, grantNarrowers, authRespEnrichers = decorators, nil, nil
+	prevDec, prevChecks, prevNarrow, prevEnrich := scopeDecorators, scopeChecks, grantNarrowers, authRespEnrichers
+	t.Cleanup(func() {
+		scopeDecorators, scopeChecks, grantNarrowers, authRespEnrichers = prevDec, prevChecks, prevNarrow, prevEnrich
+	})
+	scopeDecorators, scopeChecks, grantNarrowers, authRespEnrichers = decorators, nil, nil, nil
 }
 
 // A person is answered with what their session would hold — a wildcard role

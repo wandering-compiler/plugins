@@ -606,6 +606,7 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 	}
 	if pick.sole != nil {
 		stampOrg(scopes, labels, pick.sole.GetOrgId(), pick.sole.GetSlug())
+		markOrgInferred(ctx)
 		return nil
 	}
 	slug := pick.slug

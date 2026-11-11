@@ -466,6 +466,13 @@ features:
       - org_membership
     go_files:
       - handlers/org_email_proof_policy.go
+  - name: org_suspension
+    description: "The realm's operators suspend a whole organization (an incident, a leak): Organization.suspended_at, set and cleared by AuthMutation.SuspendOrganizations / ResumeOrganizations (bulk, by id; the project's endpoint ACL decides who may call them — a backoffice admin's Suspend / Resume actions). While it is set, Authenticate refuses every request that acts in the organization with PERMISSION_DENIED / ORG_SUSPENDED: its people's sessions and API tokens, its machine accounts' bearer tokens, OAuth tokens consented for it — one check after the organization is chosen, whichever way it was. Said only to a member. A request in no organization (signing in, listing one's own), one whose organization was only inferred (the person's only one — it then goes on in none) and the member's other organizations are not touched. Nobody enters it: accepting an invitation, registering on its host and an OAuth grant for it are refused ORG_SUSPENDED. Nothing is revoked or deleted: resuming restores every session and token as it was. One read per request in an organization. Off by default; a migration adds the column."
+    default: false
+    requires:
+      - org_membership
+    go_files:
+      - handlers/org_suspension.go
   - name: two_factor_enrolment
     description: "Enrolment at sign-in: the two_factor_policy value enrol, for the activation and (with org_two_factor_policy) per organization. Under it, a password sign-in of an account without a confirmed authenticator answers mfa_required + challenge_id + enrolment_required (SignInResp) and sends no code — no MfaChallengeRequested; the client sets up an authenticator on that challenge with AuthService.EnrollTotpAtSignIn (POST /auth/mfa/enrol, unauthenticated like VerifyMfa, signed by the key that passed the password; answers the secret, the otpauth URI and a QR code; called again it replaces the authenticator not yet confirmed) and completes the sign-in with VerifyMfa and that authenticator's first code, which confirms it, answers its ten recovery codes (VerifyMfaResp.recovery_codes) and issues the session, trusting the device. Every refusal of the enrolment is VerifyMfa's opaque one. An account with an authenticator is challenged for its code as under required. Needs two_factor_totp=true: enrol with the built-in authenticator off refuses the boot and an organization's policy. Nobody is locked out: a project switches its second factor on with enrol and every account enrols at its next sign-in. Off by default; a migration adds MfaChallenge.enrol (two_factor's)."
     default: false
@@ -1590,6 +1597,7 @@ msgids:
   - "This membership belongs to another organization."
   - "This organization admits only a confirmed email address, and this registration cannot confirm one."
   - "This organization already has a team named {name}."
+  - "This organization is suspended by the operators of the service. Contact them to have it restored."
   - "This part of the service is not open to you: none of your memberships is of a kind it admits."
   - "This password is too long. Use a shorter one."
   - "This person is already a member of the organization."

@@ -437,6 +437,18 @@ message ListOrgSuperadminsResp {
 // then checks the last-superadmin rule and writes the change. Every such
 // change takes the same lock, so two of them in one organization run one after
 // the other and the second one's check sees what the first one ended.
+// GetOrgSuspension — whether an organization is suspended (org_suspension).
+message GetOrgSuspensionReq {
+  option (w17.contrib.plugin_feature) = "org_suspension";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message GetOrgSuspensionResp {
+  option (w17.contrib.plugin_feature) = "org_suspension";
+  string org_id = 1;
+  // NULL while the organization is not suspended.
+  google.protobuf.Timestamp suspended_at = 2 [(w17.field) = { null: true }];
+}
+
 message LockOrganizationReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -2776,6 +2788,20 @@ service AuthQuery {
     };
   }
 
+  // GetOrgSuspension — the organization's suspended_at, read by Authenticate
+  // for the organization a request was resolved to (org_suspension.go). Live
+  // organizations only, as every organization reader: a deleted one is never
+  // selected, and its row answers NotFound.
+  rpc GetOrgSuspension(GetOrgSuspensionReq) returns (GetOrgSuspensionResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_suspension";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT o.id AS org_id, o.suspended_at AS suspended_at FROM @module.Organization o WHERE o.id = :org_id AND o.deleted_at IS NULL"
+      }
+    };
+  }
+
   // LockOrganization — SELECT … FOR UPDATE on the organization's row, read
   // inside the transaction of a change that can take a superadmin away; see
   // the request.
@@ -3727,6 +3753,7 @@ service AuthQuery {
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
           "       o.kind AS kind, o.created_at AS created_at, "
           "       o.deleted_at AS deleted_at, "
+          "       ?feature(org_suspension) o.suspended_at AS suspended_at, "
           "       o.ended_key AS ended_key "
           "FROM @module.Organization o WHERE o.deleted_at IS NULL ORDER BY o.name ASC, o.id ASC"
       }
@@ -3745,6 +3772,7 @@ service AuthQuery {
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
           "       o.kind AS kind, o.created_at AS created_at, "
           "       o.deleted_at AS deleted_at, "
+          "       ?feature(org_suspension) o.suspended_at AS suspended_at, "
           "       o.ended_key AS ended_key "
           "FROM @module.Organization o WHERE o.id = :id AND o.deleted_at IS NULL"
       }
@@ -3790,6 +3818,7 @@ service AuthQuery {
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
           "       o.kind AS kind, o.created_at AS created_at, "
           "       o.deleted_at AS deleted_at, "
+          "       ?feature(org_suspension) o.suspended_at AS suspended_at, "
           "       o.ended_key AS ended_key "
           "FROM @module.Organization o WHERE o.slug = :slug AND o.deleted_at IS NULL"
       }

@@ -167,6 +167,7 @@ func resolveOrgScopeByKind(ctx context.Context, h *AuthServiceHandler, userID st
 	}
 	if o := pick.sole; o != nil {
 		stampOrg(scopes, labels, o.GetOrgId(), o.GetSlug())
+		markOrgInferred(ctx)
 		return nil
 	}
 	if slug := pick.slug; slug != "" {
