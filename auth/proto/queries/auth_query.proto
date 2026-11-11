@@ -445,7 +445,8 @@ message GetOrgSuspensionReq {
 message GetOrgSuspensionResp {
   option (w17.contrib.plugin_feature) = "org_suspension";
   string org_id = 1;
-  google.protobuf.Timestamp suspended_at = 2;
+  // NULL while the organization is not suspended.
+  google.protobuf.Timestamp suspended_at = 2 [(w17.field) = { null: true }];
 }
 
 message LockOrganizationReq {
@@ -3752,6 +3753,7 @@ service AuthQuery {
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
           "       o.kind AS kind, o.created_at AS created_at, "
           "       o.deleted_at AS deleted_at, "
+          "       ?feature(org_suspension) o.suspended_at AS suspended_at, "
           "       o.ended_key AS ended_key "
           "FROM @module.Organization o WHERE o.deleted_at IS NULL ORDER BY o.name ASC, o.id ASC"
       }
@@ -3770,6 +3772,7 @@ service AuthQuery {
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
           "       o.kind AS kind, o.created_at AS created_at, "
           "       o.deleted_at AS deleted_at, "
+          "       ?feature(org_suspension) o.suspended_at AS suspended_at, "
           "       o.ended_key AS ended_key "
           "FROM @module.Organization o WHERE o.id = :id AND o.deleted_at IS NULL"
       }
@@ -3815,6 +3818,7 @@ service AuthQuery {
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
           "       o.kind AS kind, o.created_at AS created_at, "
           "       o.deleted_at AS deleted_at, "
+          "       ?feature(org_suspension) o.suspended_at AS suspended_at, "
           "       o.ended_key AS ended_key "
           "FROM @module.Organization o WHERE o.slug = :slug AND o.deleted_at IS NULL"
       }

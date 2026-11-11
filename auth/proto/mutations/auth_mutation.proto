@@ -5097,6 +5097,7 @@ service AuthMutation {
           "          kind AS organization.kind, "
           "          created_at AS organization.created_at, "
           "          deleted_at AS organization.deleted_at, "
+          "          ?feature(org_suspension) suspended_at AS organization.suspended_at, "
           "          ended_key AS organization.ended_key"
       }
     };
