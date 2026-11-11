@@ -205,6 +205,10 @@ func writeSignUpJoin(txCtx context.Context, h *AuthServiceHandler, userID string
 	if err := checkSignUpPolicyRole(txCtx, h, j, roleID); err != nil {
 		return err
 	}
+	// No one joins an organization the operators suspended.
+	if err := checkOrgEntry(txCtx, h, j.orgID); err != nil {
+		return err
+	}
 	add := &pb.AddOrgMembershipReq{UserId: userID, OrgId: j.orgID, Role: j.role}
 	if kindOfJoin != nil {
 		kindOfJoin(j.kind, add)

@@ -855,6 +855,10 @@ func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, userID string
 		}
 	}
 
+	// No one joins an organization the operators suspended.
+	if err := checkOrgEntry(txCtx, h, orgID); err != nil {
+		return nil, err
+	}
 	addReq := &pb.AddOrgMembershipReq{
 		UserId: userID,
 		OrgId:  orgID,

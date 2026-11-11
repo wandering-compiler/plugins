@@ -207,6 +207,13 @@ func (h *AuthServiceHandler) issueMCPGrant(ctx context.Context, client *pb.OAuth
 			return nil, oauthRefuse(oauthInvalidGrant, "the organization the user chose is no longer theirs")
 		}
 	}
+	// Nor is a connected app granted for an organization the operators
+	// suspended (its token would be refused on every request anyway).
+	if code.GetOrgId() != "" {
+		if err := checkOrgEntry(ctx, h, code.GetOrgId()); err != nil {
+			return nil, oauthRefuse(oauthInvalidGrant, "the organization the user chose is suspended")
+		}
+	}
 	var resp *pb.ExchangeOAuthTokenResp
 	err := h.inTx(ctx, func(txCtx context.Context) error {
 		grant, err := h.Mutation.CreateOAuthGrant(txCtx, &pb.CreateOAuthGrantReq{
