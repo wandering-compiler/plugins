@@ -338,8 +338,7 @@ func heldUnderOrgLock(ctx context.Context, h *AuthServiceHandler, held map[int32
 	// Authenticate stamps session_token_id for a session and nothing else;
 	// ResolveUser, which answers a person as their session without one,
 	// stamps acted_for.
-	var who pb.AuthResp
-	session := principal.Envelope(ctx, &who) == nil && (who.GetSessionTokenId() != "" || who.GetActedFor())
+	session := callerIsPerson(ctx)
 	realmGrants, err := callerRealmGrants(ctx, h, userID, session)
 	if err != nil {
 		return nil, err
