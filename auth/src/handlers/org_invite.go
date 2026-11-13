@@ -728,10 +728,10 @@ func (h *AuthServiceHandler) AcceptOrgInvite(ctx context.Context, req *pb.Accept
 		return nil, Unauthenticated(err)
 	}
 	// Joining changes what the PERSON holds — a membership and a role — so
-	// only their session may do it, as only a session mints a token or
-	// changes the password; an API token is refused before anything is read
-	// (org_invite/session-only).
-	if err := requireSessionCaller(ctx); err != nil {
+	// only the person may do it: their session, or this domain's own code
+	// acting for them (a product accepting through the private surface). An
+	// API token is refused before anything is read (org_invite/session-only).
+	if err := requirePersonCaller(ctx); err != nil {
 		return nil, err
 	}
 	email, err := h.callerEmail(ctx, userID)

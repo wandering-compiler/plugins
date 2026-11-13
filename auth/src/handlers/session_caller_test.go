@@ -146,3 +146,52 @@ func TestApiTokenManagement_AnAPITokenCallerIsRefused(t *testing.T) {
 		t.Errorf("a session's revoke: %v", err)
 	}
 }
+
+// actedForCallerCtx is the person as the identity's own code stamps them for
+// another domain: ResolveUser's answer through principal.ActAs — acted_for,
+// and no session token, since none was presented.
+func actedForCallerCtx(uid string) context.Context {
+	raw, err := proto.Marshal(&pb.AuthResp{UserId: uid, ActedFor: true, PermissionIds: []int32{5}})
+	if err != nil {
+		panic(err)
+	}
+	return metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		scopeUserIDKey, uid,
+		userMetadataKey, base64.StdEncoding.EncodeToString(raw)))
+}
+
+// A product accepts an invitation through the identity's private surface,
+// which hands the method no envelope of the caller's: ResolveUser + ActAs is
+// the person, and joining is theirs to do. rc.61's session-only guard refused
+// it as if it were an API token.
+func TestAcceptInvite_ThePersonTheDomainActsForJoins(t *testing.T) {
+	withRealSeams(t)
+	h, m := listAcceptHandler(pb.EmailProof_UNPROVEN, emailProofNone)
+	if _, err := h.AcceptOrgInvite(actedForCallerCtx("u1"), &pb.AcceptOrgInviteReq{Token: "secret"}); err != nil {
+		t.Fatalf("AcceptOrgInvite acted for the person: %v", err)
+	}
+	if !m.addedMembership || m.assignedOrg != "org-1" {
+		t.Errorf("membership %v, grant in %q: want a member of org-1", m.addedMembership, m.assignedOrg)
+	}
+	h, m = listAcceptHandler(pb.EmailProof_UNPROVEN, emailProofNone)
+	if _, err := h.AcceptMyOrgInvite(actedForCallerCtx("u1"), &pb.AcceptMyOrgInviteReq{InviteId: "inv-1"}); err != nil {
+		t.Fatalf("AcceptMyOrgInvite acted for the person: %v", err)
+	}
+	if !m.addedMembership {
+		t.Error("accepting from the list acted for the person added no membership")
+	}
+}
+
+// Acting for a person is not their session: what mints a credential still
+// takes one.
+func TestCreateApiToken_ActingForThePersonIsRefused(t *testing.T) {
+	m := &apiTokenMgmtMock{}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	_, err := h.CreateApiToken(actedForCallerCtx("u1"), &pb.CreateApiTokenReq{PublicKey: p256JWK, Name: "x"})
+	if status.Code(err) != codes.PermissionDenied || detailOf(t, err).GetCode() != CodeSessionRequired {
+		t.Fatalf("a token minted acting for the person: err = %v, want PermissionDenied/%s", err, CodeSessionRequired)
+	}
+	if m.issueReq != nil {
+		t.Errorf("a refused mint still wrote a token: %+v", m.issueReq)
+	}
+}

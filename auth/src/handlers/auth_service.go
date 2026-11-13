@@ -1882,6 +1882,35 @@ func requireSessionCaller(ctx context.Context) error {
 	return nil
 }
 
+// callerIsPerson reports whether the envelope speaks for the person
+// themselves rather than for a credential of theirs: a session Authenticate
+// resolved (session_token_id), or the person this domain's own code acts for
+// (ResolveUser's acted_for — the person read as their session, without one).
+// An API token is neither.
+func callerIsPerson(ctx context.Context) bool {
+	var who pb.AuthResp
+	if err := principal.Envelope(ctx, &who); err != nil {
+		return false
+	}
+	return who.GetSessionTokenId() != "" || who.GetActedFor()
+}
+
+// requirePersonCaller refuses an API token where the act changes what the
+// person holds but creates no credential: joining an organization. It admits
+// the person a domain's own code acts for, which requireSessionCaller does
+// not — a method on the identity's private surface names the person another
+// domain serves, and the private gateway hands it no envelope of the caller's,
+// so ResolveUser + principal.ActAs is the only principal it can stamp. What
+// mints a credential, or needs the session's own token id, stays on
+// requireSessionCaller.
+func requirePersonCaller(ctx context.Context) error {
+	if !callerIsPerson(ctx) {
+		return refusal(ctx, codes.PermissionDenied, errCallerNotASession.Error(),
+			CodeSessionRequired, "", MsgSessionRequired, nil)
+	}
+	return nil
+}
+
 // intersectInt32 returns the elements of `a` that also appear in `b`,
 // preserving `a`'s order and de-duplicating.
 //
