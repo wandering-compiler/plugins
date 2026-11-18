@@ -52,8 +52,11 @@ env:
 # Dev-only sandbox: a relay next to the generated stack, so the pool can be
 # tried by hand without standing one up somewhere. Wired into the project's
 # tool-owned `compose.w17.yaml` and NOWHERE else — w17 never ships a sandbox to
-# production, which is right here: in production a relay lives OUTSIDE the
-# project's network, because it is what the workers reach.
+# production. Production runs the same relay binary from the `deploy:` block
+# below: a w17 deploy target builds cmd/relay into its own image and mints
+# every identity at deploy time; a hand-written stack builds this sandbox's
+# Dockerfile (same binary) and does the ceremony itself — see SPEC.md,
+# "Running the relay in production".
 #
 # The image is built from the plugin directory (it shares the plugin's Go
 # module, so the relay and the handlers carry one copy of the contract), and
@@ -122,7 +125,7 @@ sandboxes:
         description: "OPTIONAL ceiling on tasks running here at once; 0 (the default) means the relay carries whatever its attached workers add up to. A worker reports its own slot count when it attaches, because how many sessions a machine holds is a property of the machine. Set this only to cap a relay BELOW its fleet — a shared box, or a bandwidth limit. It used to be the capacity itself, which meant a relay with no workers cheerfully granted two tickets and both callers failed at the proxy."
       - name: RELAY_CONTROL_PLANE_FINGERPRINT
         value: ""
-        description: "REQUIRED, and deliberately empty: the relay refuses to start without it. Set it to the fingerprint of the client certificate this project's control plane presents (OPS_CLUSTER_CLIENT_CERT_PATH). Nothing else may manage this relay."
+        description: "REQUIRED, and deliberately empty: the relay refuses to start without it. Set it to the fingerprint of the client certificate this project's control plane presents (client_cert_path on the storage service: <DOMAIN>_<ACTIVATION>_CLIENT_CERT_PATH, e.g. APP_CODEGEN_CLIENT_CERT_PATH). Nothing else may manage this relay."
 
 # Production: what this plugin runs beside a project, and the ceremony a deploy
 # performs for it. The building blocks only — the PROJECT decides whether an
@@ -161,6 +164,9 @@ deploy:
       description: "One worker of the pool, enrolled with this relay at deploy time. Its image is the project's: whatever the pool runs."
       adopter: true
       state: /var/lib/worker
+      # The worker reads these with workerconn.ConfigFromEnv(activation) — the
+      # library and this block name the same variables, and a test holds them
+      # together. A worker that reads names of its own does not start here.
       env:
         - { name: "W17_{ACTIVATION}_RELAY_ATTACH", value: "{address:relay.attach}" }
         - { name: "W17_{ACTIVATION}_RELAY_TUNNEL", value: "{address:relay.tunnels}" }

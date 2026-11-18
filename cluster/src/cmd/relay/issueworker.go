@@ -28,7 +28,7 @@ func issueWorker(args []string, out io.Writer) error {
 	fs.StringVar(&cfg.caKeyPath, "ca-key", os.Getenv("RELAY_CA_KEY"), "PEM private key for --ca-cert")
 	fs.StringVar(&cfg.identityDir, "identity-dir", os.Getenv("RELAY_IDENTITY_DIR"),
 		"the relay's identity directory holding its CA (dev), instead of --ca-cert/--ca-key")
-	fs.StringVar(&dir, "out", "", "the WORKER's identity directory (its W17_CODEGEN_IDENTITY_DIR) — its key is made there, or kept")
+	fs.StringVar(&dir, "out", "", "the WORKER's identity directory (its W17_<ACTIVATION>_IDENTITY_DIR) — its key is made there, or kept")
 	fs.StringVar(&name, "name", "", "a label for logs")
 	fs.DurationVar(&lifetime, "lifetime", relayserver.DefaultWorkerCertLifetime,
 		"how long the certificate lasts; the worker renews it from then on")

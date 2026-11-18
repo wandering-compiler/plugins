@@ -14,10 +14,15 @@
 # The tag is WORKSPACE-PREFIXED. An image tag is build output, and a fixed one
 # on a shared docker daemon is a name every checkout overwrites.
 #
-# Unlike the auth plugin's fakeidp this is NOT a throwaway fake: the same image
-# is what an operator runs in production, deployed separately (a relay lives
-# outside the project's own network by design — it is what the workers reach).
-# w17 never generates a production deploy stage for it.
+# Unlike the auth plugin's fakeidp this is NOT a throwaway fake: it builds the
+# relay binary production runs. A w17 deploy target builds that binary from
+# the plugin's deploy block (deploy/plugins/relay/Dockerfile in the rendered
+# stack) and mints its identities at deploy time. A hand-written stack may run
+# THIS image in production: mount a volume at /var/lib/relay, mint the
+# identities into it with `relay mint` / `relay issue-worker`, and pass them
+# with --cert/--key/--ca-cert/--ca-key (SPEC.md, "Running the relay in
+# production"). What makes the sandbox dev-only is its wiring — an identity
+# minted inside the container and lost on `down` — not the image.
 FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY src/ .

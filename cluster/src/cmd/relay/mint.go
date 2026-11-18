@@ -15,7 +15,7 @@ import (
 // anything starts:
 //
 //	relay mint --dir <d> --name relay --ca   # the relay: its identity and its worker CA
-//	relay mint --dir <d> --name console      # the control plane's client identity
+//	relay mint --dir <d> --name control-plane # the control plane's client identity
 //
 // IDEMPOTENT: an existing identity is loaded, never replaced, because every
 // fingerprint printed here is pinned somewhere (the relay's row, the relay's
@@ -26,7 +26,7 @@ func mint(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("relay mint", flag.ContinueOnError)
 	fs.SetOutput(out)
 	fs.StringVar(&dir, "dir", "", "directory the identity lives in (<name>.crt / <name>.key)")
-	fs.StringVar(&name, "name", "", "file name of the identity: relay, console, …")
+	fs.StringVar(&name, "name", "", "file name of the identity: relay, control-plane, …")
 	fs.BoolVar(&ca, "ca", false, "also make (or keep) the worker CA in the same directory (ca.crt / ca.key) — for a relay")
 	if err := fs.Parse(args); err != nil {
 		return err

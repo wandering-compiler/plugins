@@ -105,6 +105,42 @@ a `register`/`unregister_sql` pair that maintains the live relay row `local`
 (the upsert targets the unique index over `name` and `ended_key`; unregister
 ends the row, as `DeleteRelay` does, and deletes nothing).
 
+**Running the relay in production.** The relay binary is `cmd/relay`; the
+sandbox's Dockerfile builds it, and nothing about the image is dev-only — the
+sandbox's wiring is (an identity minted in the container, lost on `down`).
+
+- *Under a w17 deploy target* the deploy block does all of it: the stack
+  builds `cmd/relay` into its own image, mints the three identities into
+  volumes on every deploy (keeping existing ones), sets the control plane's
+  `client_cert_path` / `client_key_path`, and upserts the relay row `local`.
+- *In a hand-written stack* the same steps are the operator's, with the same
+  image (`sandboxes/relay/Dockerfile`, built from the plugin directory after
+  `w17ctl codegen`):
+  1. a volume for the relay at `/var/lib/relay` (owned by uid 10001) and one
+     per worker;
+  2. `relay mint --dir /var/lib/relay --name relay --ca` — the relay's
+     identity and worker CA; prints the relay's fingerprint;
+  3. `relay mint --dir <dir> --name control-plane` — the control plane's
+     client identity; its paths go to the storage service's
+     `client_cert_path` / `client_key_path`
+     (`<DOMAIN>_<ACTIVATION>_CLIENT_CERT_PATH` / `_CLIENT_KEY_PATH`) and its
+     fingerprint to the relay's `RELAY_CONTROL_PLANE_FINGERPRINT`;
+  4. `relay issue-worker --ca-cert /var/lib/relay/ca.crt --ca-key
+     /var/lib/relay/ca.key --out <worker dir> --name <name>` per worker (or a
+     registration code from the admin instead);
+  5. run the relay with `RELAY_CERT`, `RELAY_KEY`, `RELAY_CA_CERT`,
+     `RELAY_CA_KEY`, `RELAY_PROXY_ADDRESS` (what callers dial) and
+     `RELAY_CONTROL_PLANE_FINGERPRINT`, publishing only the callers port;
+  6. register the relay on the Relays page (its management address and the
+     fingerprint from step 2).
+
+**Worker environment.** One contract between the deploy block and a worker:
+`workerconn.ConfigFromEnv(activation)` reads `W17_<ACTIVATION>_RELAY_ATTACH`,
+`_RELAY_TUNNEL`, `_RELAY_FINGERPRINT`, `_IDENTITY_DIR`, `_WORKER_NAME` (the
+names the deploy block sets on the worker service, held together by a test)
+and the optional `_REGISTRATION_CODE`. Slots, engines and readiness are the
+worker's own and set on the result.
+
 **Admin preset.** Relays page (list, detail, create, update, delete — which
 ends the relay, see `base/relay-ended-not-deleted`; actions
 "Issue a registration code" with a secret result, and "Drain"). Workers page
