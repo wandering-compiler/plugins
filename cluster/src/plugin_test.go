@@ -117,7 +117,7 @@ func (c clientSet) WorkerMutation() pb.WorkerMutationClient {
 }
 
 // identityFiles mints a control-plane identity on disk, the way `relay mint
-// --name console` does, and returns its paths and fingerprint.
+// --name control-plane` does, and returns its paths and fingerprint.
 func identityFiles(t *testing.T, name string) (certPath, keyPath, fingerprint string) {
 	t.Helper()
 	dir := t.TempDir()

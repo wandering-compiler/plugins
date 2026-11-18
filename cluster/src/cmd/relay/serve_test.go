@@ -51,7 +51,7 @@ func (w testWriter) Write(p []byte) (int, error) {
 }
 
 // controlPlane is the identity a project's control plane would hold, minted
-// the way `relay mint --name console` mints it.
+// the way `relay mint --name control-plane` mints it.
 func controlPlane(t *testing.T) (relaydial.Config, string) {
 	t.Helper()
 	id, err := identity.LoadOrCreateIdentity(t.TempDir(), "console")
