@@ -1,5 +1,13 @@
 # cluster — changelog
 
+## 0.1.0-rc.21
+
+### One worker environment contract, and the relay's production path documented
+
+- **`workerconn.ConfigFromEnv(activation)`** reads the variables the deploy block sets on the worker service — `W17_<ACTIVATION>_RELAY_ATTACH`, `_RELAY_TUNNEL`, `_RELAY_FINGERPRINT`, `_IDENTITY_DIR`, `_WORKER_NAME`, plus the optional `_REGISTRATION_CODE` — into a `Config`. `workerconn.EnvName` names one of them. A worker that read names of its own started locally and refused to start under the generated stage; read them with this instead. A test holds the library and the deploy block to the same names.
+- **The relay in production.** SPEC.md, "Running the relay in production", describes both paths: a w17 deploy target builds `cmd/relay` and mints the identities itself; a hand-written stack runs the sandbox's image with a volume and identities from `relay mint` / `relay issue-worker`. The sandbox Dockerfile no longer says w17 generates no production stage for the relay.
+- **Stale names fixed.** `relay mint`'s usage names the control plane's identity `control-plane`, as the deploy block does (it said `console`). The sandbox's `RELAY_CONTROL_PLANE_FINGERPRINT` description names the storage service's `<DOMAIN>_<ACTIVATION>_CLIENT_CERT_PATH` instead of `OPS_CLUSTER_CLIENT_CERT_PATH`.
+
 ## 0.1.0-rc.20
 
 ### One queue per engine
