@@ -6,7 +6,7 @@
 # never edit the same CHANGELOG lines and never conflict over them.
 #
 # Exempt:
-#   - a release pull request (branch release/<plugin>-v0.1.0-rc.N), which
+#   - a release pull request (branch release/<plugin>-v<version>), which
 #     collects them. A branch name is anyone's to choose, so the exemption
 #     holds only for the shape tools/release-pr.sh produces: the manifest
 #     says that version, and the pull request changes the version line of
@@ -22,7 +22,7 @@ BASE="${1:?usage: $0 <base-ref>}"
 changed_files() { git -c core.quotePath=false diff --no-renames --name-only "$@" "$BASE"...HEAD; }
 changed="$(changed_files)"
 
-if [[ "${HEAD_REF:-}" =~ ^release/(.+)-v(0\.1\.0-rc\.[0-9]+)$ ]] && [ -f "${BASH_REMATCH[1]}/plugin.yaml" ]; then
+if [[ "${HEAD_REF:-}" =~ ^release/(.+)-v(0\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?)$ ]] && [ -f "${BASH_REMATCH[1]}/plugin.yaml" ]; then
 	p="${BASH_REMATCH[1]}" version="${BASH_REMATCH[2]}"
 	manifest="$(sed -n 's/^version:[[:space:]]*//p' "$p/plugin.yaml" | head -1 | tr -d "\"' ")"
 	[ "$manifest" = "$version" ] || { echo "!! $p/plugin.yaml says $manifest, the branch releases $version"; exit 1; }

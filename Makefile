@@ -7,7 +7,7 @@
 #   make gen   PLUGIN=auth     generate a plugin's src/gen (never committed)
 #   make check-dev PLUGIN=auth generate a throwaway project with EVERY feature on
 #   make release-pr PLUGIN=auth               open a plugin's release pull request (RELEASING.md)
-#   make release RELEASE=auth@v0.1.0-rc.17   cut a signed release (RELEASING.md)
+#   make release RELEASE=auth@v0.1.0         cut a signed release (RELEASING.md)
 
 ALL_PLUGINS := $(patsubst %/plugin.yaml,%,$(wildcard */plugin.yaml))
 PLUGINS     := $(if $(PLUGIN),$(PLUGIN),$(ALL_PLUGINS))
@@ -233,14 +233,16 @@ check-layout:
 			*) bad=1; echo "!! $$f: proto/$$layer is not a layer (types, queries, mutations, business, events) — a project's codegen reads it as a module of its own";; esac; \
 	done; exit $$bad
 
-# Every plugin is on the one version line the platform uses: 0.1.0-rc.N, the rc
-# counter the only thing that moves. A cluster release once went to 0.2.0 — a
-# minor bump for a break, which semver allowed and nobody wanted — and every
-# adopter had to be moved back by hand. tools/release.sh refuses the same.
+# Every plugin is on the version line the platform uses: 0.MINOR.PATCH, or -rc.N
+# of one. Since 0.1.0 one minor line works together (a plugin 0.1.x with an SDK
+# and a w17ctl 0.1.y): a fix is the next patch, a feature or a break goes out as
+# candidates of the next minor (0.2.0-rc.N), never straight to a new minor — a
+# cluster release once went to 0.2.0 on its own, and every adopter had to be
+# moved back by hand. tools/release.sh refuses anything else.
 check-versions:
 	@bad=0; for m in */plugin.yaml; do \
 		v=$$(sed -n 's/^version:[[:space:]]*//p' $$m | head -1); \
-		echo "$$v" | grep -Eq '^0\.1\.0-rc\.[0-9]+$$' || { echo "!! $$m: version $$v — every plugin is 0.1.0-rc.N"; bad=1; }; \
+		echo "$$v" | grep -Eq '^0\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$$' || { echo "!! $$m: version $$v — a plugin is 0.MINOR.PATCH, or -rc.N of one"; bad=1; }; \
 	done; exit $$bad
 
 release:

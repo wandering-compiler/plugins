@@ -3,9 +3,11 @@
 #
 #   usage: tools/release-pr.sh <plugin>
 #
-# The version released is the manifest's when no tag carries it yet (a bump
-# that already landed), otherwise the next rc after the newest tag. The pull
-# request:
+# The version released is $VERSION when it is given (0.1.0, 0.2.0-rc.1: a
+# release, or the first candidate of the next minor); otherwise the
+# manifest's when no tag carries it yet (a bump that already landed), the
+# next rc after an rc, or the next patch after a release. It must be newer
+# than the newest tag. The pull request:
 #   - sets that version in <plugin>/plugin.yaml;
 #   - collects <plugin>/changes/*.md into <plugin>/CHANGELOG.md under
 #     `## <version>` (an `## Unreleased` section at the top becomes that
@@ -28,18 +30,28 @@ if [ "${DRY_RUN:-0}" != 1 ] && [ "$(git rev-parse HEAD)" != "$(git rev-parse ori
 	echo "!! HEAD is not origin/main — check out main as merged and pull first" >&2; exit 1
 fi
 
+# A version: 0.MINOR.PATCH, a release candidate of one with -rc.N.
+VERRE='^0\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'
+# newest prints the newest of its stdin's versions, a release above its own
+# candidates (sort -V alone puts 0.1.0 below 0.1.0-rc.1; ~ sorts first).
+newest() { sed 's/-rc\./~rc./' | sort -V | tail -1 | sed 's/~rc\./-rc./'; }
 manifest="$(sed -n 's/^version:[[:space:]]*//p' "$PLUGIN/plugin.yaml" | head -1 | tr -d "\"' ")"
-echo "$manifest" | grep -Eq '^0\.1\.0-rc\.[0-9]+$' || { echo "!! $PLUGIN/plugin.yaml says $manifest, not on the version line 0.1.0-rc.N" >&2; exit 1; }
-rc() { echo "${1##*.}"; }
-last="$(git tag -l "$PLUGIN/v0.1.0-rc.*" | sed "s|^$PLUGIN/v||" | sort -V | tail -1)"
-if [ -z "$last" ] || [ "$(rc "$manifest")" -gt "$(rc "$last")" ]; then
+echo "$manifest" | grep -Eq "$VERRE" || { echo "!! $PLUGIN/plugin.yaml says $manifest, not a version (0.MINOR.PATCH, or -rc.N of one)" >&2; exit 1; }
+last="$(git tag -l "$PLUGIN/v0.*" | sed "s|^$PLUGIN/v||" | grep -E "$VERRE" | newest || true)"
+if [ -n "${VERSION:-}" ]; then
+	version="${VERSION#v}"
+elif [ -z "$last" ] || [ "$(printf '%s\n%s\n' "$manifest" "$last" | newest)" != "$last" ]; then
 	version="$manifest" # a bump that landed already, not yet tagged
-elif [ "$manifest" = "$last" ]; then
-	version="0.1.0-rc.$(( $(rc "$last") + 1 ))"
+elif [[ "$last" == *-rc.* ]]; then
+	version="${last%-rc.*}-rc.$(( ${last##*.} + 1 ))"
 else
-	echo "!! $PLUGIN/plugin.yaml says $manifest, behind the newest tag $last" >&2; exit 1
+	IFS=. read -r ma mi pa <<<"$last"
+	version="$ma.$mi.$((pa + 1))"
 fi
-echo "$version" | grep -Eq '^0\.1\.0-rc\.[0-9]+$' || { echo "!! $version is not on the version line 0.1.0-rc.N" >&2; exit 1; }
+echo "$version" | grep -Eq "$VERRE" || { echo "!! $version is not a version (0.MINOR.PATCH, or -rc.N of one)" >&2; exit 1; }
+if [ -n "$last" ] && { [ "$version" = "$last" ] || [ "$(printf '%s\n%s\n' "$version" "$last" | newest)" != "$version" ]; }; then
+	echo "!! $version is not newer than the newest tag $last" >&2; exit 1
+fi
 
 shopt -s nullglob
 fragments=("$PLUGIN"/changes/*.md)

@@ -168,7 +168,7 @@ jobs:
         run: make check-refs
       - name: every Go image and go.mod names go.version's line
         run: make check-go-version
-      - name: every plugin is on the 0.1.0-rc.N version line
+      - name: every plugin is on the platform's version line (0.MINOR.PATCH, -rc.N)
         run: make check-versions
       - name: every plugin proto is in a layer a project's codegen reads
         run: make check-layout
