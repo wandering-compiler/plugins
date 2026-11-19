@@ -16,7 +16,7 @@ step every client must take) gets a fragment whose heading ends in
 `(read first)`, as `### Upgrading to device identity (read first)` does in
 auth 0.1.0-rc.25. `w17ctl plugin update` prints every such section the update
 crosses, so a project moving across that release sees it before it builds.
-A release pull request (branch `release/<plugin>-v0.1.0-rc.N`) is exempt only
+A release pull request (branch `release/<plugin>-v<version>`) is exempt only
 in the shape `tools/release-pr.sh` gives it: the manifest says that version, and
 it changes the version in `plugin.yaml`, `CHANGELOG.md`, and deletes fragments,
 nothing else.
@@ -31,9 +31,12 @@ nothing else.
    ```
 
    `tools/release-pr.sh` picks the version: the manifest's when no tag carries
-   it yet, otherwise the next rc after the newest tag. Every plugin is on one
-   version line, `v0.1.0-rc.N`: only the rc counter moves; a break is a new rc,
-   not a new minor. The pull request sets the version in `plugin.yaml`,
+   it yet, otherwise the next rc after an rc and the next patch after a
+   release. `VERSION=0.2.0-rc.1 make release-pr PLUGIN=auth` names it instead.
+   Every plugin is on the platform's version line: one minor line works
+   together (0.1.x), a fix is its next patch, and a feature or a break goes out
+   as release candidates of the next minor (`0.2.0-rc.N`), released as `0.2.0`
+   with the rest of the platform. The pull request sets the version in `plugin.yaml`,
    collects the fragments into `CHANGELOG.md` under `## <version>` (an
    `## Unreleased` section becomes it), and deletes the fragments. Merging it
    is the release decision. `DRY_RUN=1` prepares the commit on the local
@@ -53,7 +56,7 @@ nothing else.
 
    ```sh
    git switch main && git pull
-   W17_CONSOLE_ADDR=<console> make release RELEASE=auth@v0.1.0-rc.17
+   W17_CONSOLE_ADDR=<console> make release RELEASE=auth@v0.1.0
    ```
 
 A release is a commit of `main`. The tag `<plugin>/v<version>` sits on that
@@ -62,7 +65,7 @@ There is no second branch: the `releases` branch held the rendered form of the
 releases cut before this, and its tags stay installable.
 
 `tools/release.sh` refuses unless:
-- the version is `v0.1.0-rc.N`;
+- the version is `v0.MINOR.PATCH`, or `-rc.N` of one;
 - the manifest says that version;
 - `CHANGELOG.md` starts with that version's section and `<plugin>/changes/`
   holds no fragment (one merged after the release pull request would ship
