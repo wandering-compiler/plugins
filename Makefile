@@ -22,9 +22,14 @@ W17CTL = $$(tools/w17ctl.sh)
 GOLANGCI = $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(shell tr -d ' \n' < $(CURDIR)/tools/golangci-version) run --config $(CURDIR)/tools/golangci.yml
 
 # gen is a prerequisite of every target that compiles a plugin's Go.
-.PHONY: check plugins-exist gen test vet fmt check-dev check-committed-pb check-render check-published-tests check-modules check-stage check-plugin-msgids plugin-msgids-sync lint check-refs check-names check-tools buf-image release release-pr
+.PHONY: check check-go-version plugins-exist gen test vet fmt check-dev check-committed-pb check-render check-published-tests check-modules check-stage check-plugin-msgids plugin-msgids-sync lint check-refs check-names check-tools buf-image release release-pr
 
-check: fmt vet lint test check-modules check-stage check-plugin-msgids check-committed-pb check-render check-published-tests check-dev check-refs check-names check-tools check-versions check-layout
+check: check-go-version fmt vet lint test check-modules check-stage check-plugin-msgids check-committed-pb check-render check-published-tests check-dev check-refs check-names check-tools check-versions check-layout
+
+# Every Go image, go.mod line and setup-go version names go.version's line;
+# scripts/go-bump.sh <line> moves them all.
+check-go-version:
+	@scripts/check-go-version.sh
 
 # A typo in PLUGIN must not make every check pass over nothing.
 plugins-exist:

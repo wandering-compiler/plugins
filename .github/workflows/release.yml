@@ -101,7 +101,7 @@ jobs:
       - uses: actions/setup-go@v5
         if: steps.which.outputs.list != ''
         with:
-          go-version: '1.26.x'
+          go-version: '1.27.x'
 
       # A console that binds devices accepts W17_SIGN_TOKEN only with a DPoP
       # proof signed by the key the token was issued for. w17ctl reads that

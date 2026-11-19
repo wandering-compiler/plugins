@@ -8,7 +8,7 @@
 # (protoc-gen-go v1.36.11 / protoc-gen-go-grpc v1.6.2), so a regeneration matches
 # byte for byte. Bump them together with the committed pb, or the output churns.
 
-FROM golang:1.26-alpine AS plugins
+FROM golang:1.27-alpine AS plugins
 ENV CGO_ENABLED=0
 RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 \
  && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2

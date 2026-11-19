@@ -23,7 +23,7 @@
 # with --cert/--key/--ca-cert/--ca-key (SPEC.md, "Running the relay in
 # production"). What makes the sandbox dev-only is its wiring — an identity
 # minted inside the container and lost on `down` — not the image.
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 COPY src/ .
 RUN test -d gen/pb || { echo "src/gen/pb is missing: in a project run \`w17ctl codegen\`, in the plugins clone \`w17ctl plugin gen-pb cluster\`, then build again" >&2; exit 1; }

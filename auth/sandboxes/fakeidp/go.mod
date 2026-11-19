@@ -4,4 +4,4 @@
 // consuming project's bundle; the release ships it as build context only.
 module github.com/wandering-compiler/plugins/auth/sandboxes/fakeidp
 
-go 1.26
+go 1.27.0

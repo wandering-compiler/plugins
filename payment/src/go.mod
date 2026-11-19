@@ -1,6 +1,6 @@
 module github.com/wandering-compiler/plugins/payment
 
-go 1.26.1
+go 1.27.0
 
 require (
 	github.com/lib/pq v1.12.3

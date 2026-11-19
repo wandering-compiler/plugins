@@ -1,11 +1,6 @@
 module github.com/wandering-compiler/plugins/auth
 
-go 1.26.1
-
-require (
-	golang.org/x/crypto v0.57.0
-	google.golang.org/grpc v1.83.2
-)
+go 1.27.0
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
@@ -63,6 +58,8 @@ require (
 require (
 	filippo.io/age v1.3.1
 	github.com/wandering-compiler/sdk/go v0.1.0-rc.73
+	golang.org/x/crypto v0.57.0
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 	rsc.io/qr v0.2.0
 )

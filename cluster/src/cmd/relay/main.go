@@ -456,9 +456,8 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 			// into an outage for every accepted one.
 			log.Printf("tunnel refused: %v", e)
 		})
-		if err != nil {
-			log.Printf("tunnel listener stopped: %v", err)
-		}
+		// ServeTunnels returns only when the listener fails, always with why.
+		log.Printf("tunnel listener stopped: %v", err)
 	}()
 
 	// The WORKER-ATTACH server: gRPC, worker TLS, its own port.
