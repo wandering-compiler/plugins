@@ -1,6 +1,6 @@
 module github.com/wandering-compiler/plugins/cluster
 
-go 1.26.0
+go 1.27.0
 
 require (
 	github.com/wandering-compiler/sdk/go v0.1.0-rc.73

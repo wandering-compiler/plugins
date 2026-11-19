@@ -9,7 +9,7 @@
 #
 # This image is NEVER shipped to production — a sandbox is throwaway dev
 # infra, started only by a project's dev compose.
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 go build -o /fakeidp .

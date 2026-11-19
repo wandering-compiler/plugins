@@ -87,7 +87,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.x'
+          go-version: '1.27.x'
           # The golangci-lint pin is part of the key: lint builds it with `go run`,
           # and a key that ignored it would restore a cache saved before the
           # pin and never save the built linter.
@@ -162,10 +162,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.x'
+          go-version: '1.27.x'
           cache: false
       - name: no references to the platform's private docs
         run: make check-refs
+      - name: every Go image and go.mod names go.version's line
+        run: make check-go-version
       - name: every plugin is on the 0.1.0-rc.N version line
         run: make check-versions
       - name: every plugin proto is in a layer a project's codegen reads
