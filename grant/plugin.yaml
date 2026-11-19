@@ -8,7 +8,7 @@ requires_w17: ">=1.18"
 go_module: github.com/wandering-compiler/plugins/grant
 
 description: "What an organization shows before it is trusted, approved by the platform: its envelope (name, logos, verified host, links) on the consent, invitation and sign-in pages. An organization proposes, the backoffice approves; only an approved envelope is ever read. The hosts an organization is presented on are the auth plugin's (org_hosts)."
-license: "Apache-2.0"
+license: "MIT"
 
 # The caller and the active organization are the auth plugin's
 # (Authenticate's envelope and its org_id scope).
