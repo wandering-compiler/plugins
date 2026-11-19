@@ -12,23 +12,31 @@ codegen stages the sources into its service bundles.
 
 `main` holds the **author tree**: live Go, a real `go.mod`, the tests, the
 generated pb. It changes through pull requests only. A release is a tag on a
-commit of `main`, `<plugin>/v<version>`, signed (RELEASING.md). `w17ctl` renders
-the plugin into its installable form when it installs it. Releases cut before
-this live on the `releases` branch, rendered, and stay installable. A release
-tagged on `main` carries its signature in the tag, which w17ctl v0.1.0-rc.74 and
-newer verify; an older w17ctl installs it as unsigned.
+commit of `main`, `<plugin>/v<version>`, signed (RELEASING.md); `w17ctl` checks
+the signature and renders the plugin into its installable form when it installs
+it. Releases cut before tags moved to `main` live on the `releases` branch and
+stay installable.
 
-A consumer installs a tag:
+A consumer installs a release:
 
 ```sh
-w17ctl plugin install https://github.com/wandering-compiler/plugins#auth/v0.1.0-rc.19
+w17ctl plugin install https://github.com/wandering-compiler/plugins#auth/v0.1.0
 ```
 
 To try an unreleased change, install a commit of `main` (`…#auth@<sha>`). It
-lands unsigned. w17ctl v0.1.0-rc.66 and newer render the author tree on install,
-so it places what a release of that commit would. v0.1.0-rc.65 and older place
-the raw author tree, with its generated pb, sandboxes and a live go.mod (tests
-are dropped), so upgrade w17ctl before installing a commit.
+lands unsigned, rendered the way a release of that commit would be.
+
+## Versions
+
+Plugins follow the w17 version line. Everything on one minor line works
+together: a plugin `0.1.x` with an SDK and a w17ctl `0.1.y`. A fix is a patch
+release (`0.1.1`); a new feature or an incompatible change goes out as release
+candidates of the next minor (`0.2.0-rc.N`). The modules declare the Go line
+in `go.version` (`go 1.27.0` today).
+
+## License
+
+MIT, see [LICENSE](LICENSE).
 
 ## Working on a plugin
 

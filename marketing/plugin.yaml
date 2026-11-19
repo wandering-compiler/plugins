@@ -8,7 +8,7 @@ requires_w17: ">=1.17"
 go_module: github.com/wandering-compiler/plugins/marketing
 
 description: "The request stream into a marketing tool: every signed-in request of a marketing surface becomes an event on the user's contact, contacts follow the auth plugin's accounts, consent and erasure. Brevo first."
-license: "Apache-2.0"
+license: "MIT"
 
 # The accounts, consent and erasure come from auth's events; the publisher
 # has to be activated beside this plugin, in the same domain.
