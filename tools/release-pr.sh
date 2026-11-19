@@ -37,16 +37,25 @@ VERRE='^0\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'
 newest() { sed 's/-rc\./~rc./' | sort -V | tail -1 | sed 's/~rc\./-rc./'; }
 manifest="$(sed -n 's/^version:[[:space:]]*//p' "$PLUGIN/plugin.yaml" | head -1 | tr -d "\"' ")"
 echo "$manifest" | grep -Eq "$VERRE" || { echo "!! $PLUGIN/plugin.yaml says $manifest, not a version (0.MINOR.PATCH, or -rc.N of one)" >&2; exit 1; }
-last="$(git tag -l "$PLUGIN/v0.*" | sed "s|^$PLUGIN/v||" | grep -E "$VERRE" | newest || true)"
+# The newest tag on a version's minor line: the line is what one release of the
+# platform works with, and a tag on another line (cluster's 0.2.0-rc.N, cut by
+# mistake and immutable since) neither blocks nor follows it.
+line() { echo "$1" | cut -d. -f1,2; }
+newest_on() { git tag -l "$PLUGIN/v$1.*" | sed "s|^$PLUGIN/v||" | grep -E "$VERRE" | newest || true; }
+# (cluster's 0.2 line starts at 0.2.0-rc.11 for that reason.)
 if [ -n "${VERSION:-}" ]; then
 	version="${VERSION#v}"
-elif [ -z "$last" ] || [ "$(printf '%s\n%s\n' "$manifest" "$last" | newest)" != "$last" ]; then
-	version="$manifest" # a bump that landed already, not yet tagged
-elif [[ "$last" == *-rc.* ]]; then
-	version="${last%-rc.*}-rc.$(( ${last##*.} + 1 ))"
+	last="$(newest_on "$(line "$version")")"
 else
-	IFS=. read -r ma mi pa <<<"$last"
-	version="$ma.$mi.$((pa + 1))"
+	last="$(newest_on "$(line "$manifest")")"
+	if [ -z "$last" ] || [ "$(printf '%s\n%s\n' "$manifest" "$last" | newest)" != "$last" ]; then
+		version="$manifest" # a bump that landed already, not yet tagged
+	elif [[ "$last" == *-rc.* ]]; then
+		version="${last%-rc.*}-rc.$(( ${last##*.} + 1 ))"
+	else
+		IFS=. read -r ma mi pa <<<"$last"
+		version="$ma.$mi.$((pa + 1))"
+	fi
 fi
 echo "$version" | grep -Eq "$VERRE" || { echo "!! $version is not a version (0.MINOR.PATCH, or -rc.N of one)" >&2; exit 1; }
 if [ -n "$last" ] && { [ "$version" = "$last" ] || [ "$(printf '%s\n%s\n' "$version" "$last" | newest)" != "$version" ]; }; then
