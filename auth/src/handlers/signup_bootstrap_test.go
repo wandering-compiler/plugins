@@ -145,7 +145,11 @@ func TestCountUsers_IsRealmWide(t *testing.T) {
 		t.Errorf("CountUsersReq has %d field(s); a per-organization count would need one", n)
 	}
 	dql := methodDQL(t, readProto(t, filepath.Join("..", "..", "proto", "queries", "auth_query.proto")), "rpc CountUsers(")
-	if !strings.Contains(dql, `"SELECT COUNT(*) AS count FROM @module.User u"`) || strings.Contains(dql, "WHERE") {
+	// The whole table: the only WHERE is the gated projection's FILTER that
+	// counts the machine accounts apart (signupHumans), never one on the
+	// statement.
+	want := `"SELECT COUNT(*) AS count, ?feature(service_account) COUNT(*) FILTER (WHERE u.kind = 1) AS bots FROM @module.User u"`
+	if !strings.Contains(dql, want) || strings.Count(dql, "WHERE") != 1 {
 		t.Errorf("CountUsers is not a count of the whole table:\n%s", dql)
 	}
 }
