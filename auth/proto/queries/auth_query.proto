@@ -186,6 +186,10 @@ message CountUsersReq {
 message CountUsersResp {
   option (w17.contrib.plugin_feature) = "rbac";
   int64 count = 1;
+  // bots — how many of `count` are machine accounts. The first_user
+  // bootstrap is for the first PERSON: a machine account seeded by a
+  // fixture before anybody signed up must not take it.
+  int64 bots = 2 [(w17.contrib.plugin_feature_field) = "service_account"];
 }
 
 // --- user_admin feature: turnkey admin user directory ---
@@ -2457,7 +2461,10 @@ service AuthQuery {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "SELECT COUNT(*) AS count FROM @module.User u"
+        // A SELECT's filter takes no feature gate (dropping a conjunct would
+        // count MORE), so the bots are a gated projection the handler
+        // subtracts (signupHumans).
+        dql: "SELECT COUNT(*) AS count, ?feature(service_account) COUNT(*) FILTER (WHERE u.kind = 1) AS bots FROM @module.User u"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";

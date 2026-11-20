@@ -20,6 +20,22 @@ func init() {
 	signupAssignRoleIDs = assignSignupRoleIDs
 }
 
+// countedBots is how many of CountUsers' accounts are machine accounts: nil
+// without service_account (the field does not exist there, and every account
+// is a person). service_account.go installs it (it requires rbac, which stages this
+// file).
+var countedBots func(*pb.CountUsersResp) int64
+
+// signupHumans is the number of PEOPLE registered: the first_user bootstrap
+// is the first person's, and a machine account a fixture seeded before
+// anybody signed up does not take it.
+func signupHumans(r *pb.CountUsersResp) int64 {
+	if countedBots == nil {
+		return r.GetCount()
+	}
+	return r.GetCount() - countedBots(r)
+}
+
 // resolveSignupRoleIDs picks the declarative role set for a new signup: the
 // first_user (bootstrap-admin) roles when there is no user yet, else the
 // default roles. Membership is seeded from `(w17.acl_roles)` into the
@@ -43,7 +59,7 @@ func resolveSignupRoleIDs(ctx context.Context, h *AuthServiceHandler) (signupRol
 	if err != nil {
 		return signupRoles{}, err
 	}
-	if cnt.GetCount() != 0 {
+	if signupHumans(cnt) != 0 {
 		return signupRoles{ids: def.GetRoleIds()}, nil
 	}
 	first, err := h.Query.GetFirstUserRoles(ctx, &pb.GetFirstUserRolesReq{})

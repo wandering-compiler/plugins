@@ -20,12 +20,13 @@ import (
 type signupRolesQueryMock struct {
 	pb.AuthQueryClient
 	count      int64
+	bots       int64
 	firstRoles []string
 	defRoles   []string
 }
 
 func (m *signupRolesQueryMock) CountUsers(ctx context.Context, in *pb.CountUsersReq, opts ...grpc.CallOption) (*pb.CountUsersResp, error) {
-	return &pb.CountUsersResp{Count: m.count}, nil
+	return &pb.CountUsersResp{Count: m.count, Bots: m.bots}, nil
 }
 func (m *signupRolesQueryMock) GetFirstUserRoles(ctx context.Context, in *pb.GetFirstUserRolesReq, opts ...grpc.CallOption) (*pb.GetFirstUserRolesResp, error) {
 	return &pb.GetFirstUserRolesResp{RoleIds: m.firstRoles}, nil
@@ -191,5 +192,27 @@ func TestBootstrapSlot_FitsItsColumn(t *testing.T) {
 	// typere.Slug is the pattern the generated storage validation applies.
 	if !typere.Slug.MatchString(bootstrapSlot) || len(bootstrapSlot) > maxLen {
 		t.Fatalf("bootstrapSlot %q is not a SLUG of at most %d characters", bootstrapSlot, maxLen)
+	}
+}
+
+// A machine account a fixture seeded before anybody signed up does not take
+// the first_user bootstrap: it is the first PERSON's. A
+// realm with machine accounts counts them apart; the first person after one
+// still gets the bootstrap roles, the second person does not.
+func TestAssignSignupRoles_ASeededMachineAccountDoesNotTakeTheBootstrap(t *testing.T) {
+	if countedBots == nil {
+		t.Skip("service_account is not staged in this build")
+	}
+	q := &signupRolesQueryMock{count: 1, bots: 1, firstRoles: []string{"role-admin"}, defRoles: []string{"role-member"}}
+	mut := &signupRolesMutationMock{}
+	assignFor(t, &AuthServiceHandler{Query: q, Mutation: mut}, "u1")
+	if len(mut.assigned) != 1 || mut.assigned[0] != "role-admin" {
+		t.Errorf("first person after a seeded bot: assigned = %v, want [role-admin]", mut.assigned)
+	}
+	q2 := &signupRolesQueryMock{count: 2, bots: 1, firstRoles: []string{"role-admin"}, defRoles: []string{"role-member"}}
+	mut2 := &signupRolesMutationMock{}
+	assignFor(t, &AuthServiceHandler{Query: q2, Mutation: mut2}, "u2")
+	if len(mut2.assigned) != 1 || mut2.assigned[0] != "role-member" {
+		t.Errorf("second person: assigned = %v, want [role-member]", mut2.assigned)
 	}
 }
