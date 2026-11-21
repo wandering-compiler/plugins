@@ -5,8 +5,10 @@ on:
     # labeled/unlabeled too: the no-changelog label changes the changelog
     # job's answer.
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  # main is the released line (0.1.x), next the coming minor: both run on
+  # push. Releases stay on main (release.yml, tools/release.sh).
   push:
-    branches: [main]
+    branches: [main, next]
 
 permissions:
   contents: read
