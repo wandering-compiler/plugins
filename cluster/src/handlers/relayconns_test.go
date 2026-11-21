@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
@@ -609,6 +610,51 @@ func TestPlacement_ACallerLeavingIsNotARelayFailure(t *testing.T) {
 	h.connsMu.Unlock()
 	if after != before {
 		t.Error("the caller leaving retired the shared connection")
+	}
+}
+
+// atDeadline is the moment the flake lived in: the caller's deadline has
+// passed and the relay already answered DeadlineExceeded, but the context's
+// own timer has not yet marked it done (Err is still nil).
+type atDeadline struct{ context.Context }
+
+func (atDeadline) Deadline() (time.Time, bool) { return time.Now().Add(-time.Millisecond), true }
+func (atDeadline) Err() error                  { return nil }
+
+// A relay's DeadlineExceeded at the caller's own deadline is the caller
+// leaving, even before ctx.Err() says so: not recorded, connection kept. A
+// failure while the caller still has time is the relay's, and retires it.
+func TestObserve_TheCallersDeadlineBeforeItsTimerIsTheCallerLeaving(t *testing.T) {
+	st := &store{relays: []Relay{{ID: "id-a", Name: "relay-a", URL: "a", Fingerprint: "f"}}}
+	h := &ClusterServiceHandler{Relays: st, Workers: &workerStore{}}
+	cc, err := grpc.NewClient("127.0.0.1:1", grpc.WithTransportCredentials(insecure.NewCredentials())) // lazy: never dialled here
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conns = map[string]*relayConn{"id-a": {cc: cc}}
+	gone := status.Error(codes.DeadlineExceeded, "stream terminated by RST_STREAM with error code: CANCEL")
+
+	h.observe(atDeadline{t.Context()}, st.relays[0], gone)
+	settle(t, h)
+	if f := st.failedFor("id-a"); len(f) != 0 {
+		t.Fatalf("the caller's deadline was recorded as the relay failing: %v", f)
+	}
+	if _, ok := h.conns["id-a"]; !ok {
+		t.Fatal("the caller's deadline retired the shared connection")
+	}
+	if callerLeftErr(atDeadline{t.Context()}) != context.DeadlineExceeded {
+		t.Fatal("at its deadline the caller has left with DeadlineExceeded")
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+	defer cancel()
+	h.observe(ctx, st.relays[0], gone)
+	settle(t, h)
+	if f := st.failedFor("id-a"); len(f) == 0 {
+		t.Fatal("a relay timing out while the caller still had time must count as the relay failing")
+	}
+	if _, ok := h.conns["id-a"]; ok {
+		t.Fatal("a relay failure must retire its connection")
 	}
 }
 
