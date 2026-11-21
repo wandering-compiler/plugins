@@ -786,3 +786,38 @@ message BotCreated {
   // device_id — the key thumbprint of the operator's device.
   string device_id  = 4;
 }
+
+// AccountCreated — emitted on AuthMutation.CreateAdminUser, when an operator
+// creates a person's account from the admin (AuthService.CreateAccount). The
+// account has no usable password until its owner follows the setup link;
+// UserCreated stays the sign-up's event and BotCreated the machine account's
+// (one emit site per event). Gated admin_accounts.
+message AccountCreated {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.account.created"
+  };
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+
+  string user_id    = 1;
+  string email      = 2;
+  string created_by = 3;
+  // device_id — the key thumbprint of the operator's device.
+  string device_id  = 4;
+}
+
+// AccountSetUp — emitted on AuthMutation.SetUpAccountPassword, when the owner
+// of an account an operator created sets its first password through the setup
+// link (AuthService.SetUpAccount). Gated admin_accounts.
+message AccountSetUp {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.account.set_up"
+  };
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+
+  string user_id = 1;
+  // device_id — the key thumbprint of the device that set the password,
+  // empty when the request carried none.
+  string device_id = 2;
+}

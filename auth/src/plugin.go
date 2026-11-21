@@ -100,6 +100,8 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		NoOrgFromSoleMembership: !cfg.OrgFromSoleMembership,
 		EmailProofRequired:      cfg.EmailProofRequired,
 		OrgInviteTTLHours:       cfg.OrgInviteTtlHours,
+		AccountSetupTTLHours:    cfg.AccountSetupTtlHours,
+		AccountSetupURL:         cfg.AccountSetupURL,
 
 		SignUpAllowlist:              cfg.SignUpAllowlist,
 		SignUpConfirmationTTLSeconds: cfg.SignUpConfirmationTtlSeconds,
