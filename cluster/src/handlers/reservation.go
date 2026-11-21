@@ -78,8 +78,8 @@ func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.Reserve
 		if err == nil {
 			return stampReservation(st, c.Relay, holder), nil
 		}
-		if ctx.Err() != nil {
-			return nil, status.FromContextError(ctx.Err()).Err()
+		if left := callerLeftErr(ctx); left != nil {
+			return nil, status.FromContextError(left).Err()
 		}
 		if refusal.ReasonOf(err) == "" {
 			// No reason: the connection that just answered its stats failed

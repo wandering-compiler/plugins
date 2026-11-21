@@ -67,8 +67,8 @@ func (h *ClusterServiceHandler) ScheduleTask(
 		}
 		// The caller went away, or their deadline passed. Trying the next
 		// relay would place work for somebody who is no longer listening.
-		if ctx.Err() != nil {
-			return status.FromContextError(ctx.Err()).Err()
+		if left := callerLeftErr(ctx); left != nil {
+			return status.FromContextError(left).Err()
 		}
 		// Anything else the RELAY said is final for this request — it accepted
 		// the conversation and then refused or failed, and a second relay would
@@ -310,7 +310,7 @@ func (h *ClusterServiceHandler) proxyOne(
 // say so. Placements and polls use observe, which never waits. Both swallow
 // their own errors (see record).
 func (h *ClusterServiceHandler) note(ctx context.Context, r Relay, cause error) {
-	if ctx.Err() != nil {
+	if callerLeft(ctx) {
 		return // the operator left; the relay did not fail (see observe)
 	}
 	h.retireRelay(r.ID)

@@ -188,7 +188,7 @@ func (h *ClusterServiceHandler) acquire(ctx context.Context, r Relay) (*relayCon
 		h.release(c)
 		// Not when the caller left: the connection may be coming up fine,
 		// and other calls may be waiting on it.
-		if ctx.Err() == nil {
+		if !callerLeft(ctx) {
 			h.retire(r.ID, c)
 		}
 		return nil, err
@@ -290,6 +290,27 @@ func (h *ClusterServiceHandler) Close(ctx context.Context) error {
 	return h.waitObserved(ctx)
 }
 
+// callerLeft says the caller's ctx is done — cancelled, or at its deadline.
+// The deadline is read as well as Err: the call carries the caller's deadline
+// to the relay, and the relay's DeadlineExceeded can arrive at that very
+// moment, before the context's own timer has marked ctx done. Read off Err
+// alone, the caller timing out was then counted as the relay failing and
+// retired the connection the other calls share. A relay that fails before the
+// caller's deadline (its own timeout, a dial bound) is still a failure.
+func callerLeft(ctx context.Context) bool { return callerLeftErr(ctx) != nil }
+
+// callerLeftErr is callerLeft's cause: ctx.Err(), or DeadlineExceeded at the
+// deadline the context has not marked yet. Nil while the caller is there.
+func callerLeftErr(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if d, ok := ctx.Deadline(); ok && !time.Now().Before(d) {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
 // observation is what a placement or a poll saw of a relay, waiting to be
 // written onto its row. err nil = reached.
 type observation struct {
@@ -316,7 +337,7 @@ type observation struct {
 // deadline), not the relay failing: it is neither recorded nor allowed to
 // retire a connection other calls are using.
 func (h *ClusterServiceHandler) observe(ctx context.Context, r Relay, err error) {
-	if err != nil && ctx.Err() != nil {
+	if err != nil && callerLeft(ctx) {
 		return
 	}
 	if err != nil {
