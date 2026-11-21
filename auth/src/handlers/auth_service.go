@@ -281,6 +281,10 @@ type AuthServiceHandler struct {
 	// boolean carried, kept because it did not stop being true.
 	EmailProofRequired string
 	OrgInviteTTLHours  int // how long an invitation stays acceptable (org_invite_ttl_hours)
+	// AccountSetupTTLHours and AccountSetupURL: an admin-created account's
+	// setup link (admin_accounts; account_setup_ttl_hours, account_setup_url).
+	AccountSetupTTLHours int
+	AccountSetupURL      string
 
 	// APITokenDefaultTTLHours is the lifetime of an API token minted without
 	// an explicit expires_at (api_token_default_ttl_hours). 0 = never expires;

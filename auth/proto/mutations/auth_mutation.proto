@@ -6540,4 +6540,184 @@ service AuthMutation {
     };
   }
 
+
+  // CreateAdminUser — insert a person's account an operator created from the
+  // admin (AuthService.CreateAccount): no usable password ('!', as a machine
+  // account's), so nobody signs in to it until its owner sets one through the
+  // setup link (SetUpAccountPassword). Refuses a taken address (AlreadyExists).
+  rpc CreateAdminUser(CreateAdminUserReq) returns (CreateAdminUserResp) {
+    option (w17.contrib.plugin_feature_rpc) = "admin_accounts";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.User SET "
+          "email = :email, "
+          "password_hash = \'!\' "
+          "RETURNING id AS user.id, "
+          "          email AS user.email, "
+          "          password_hash AS user.password_hash, "
+          "          created_at AS user.created_at, "
+          "          ?feature(email_verification) email_verified_at AS user.email_verified_at, "
+          "          ?feature(email_verification) email_proof AS user.email_proof, "
+          "          ?feature(user_admin) disabled_at AS user.disabled_at, "
+          "          ?feature(service_account) kind AS user.kind, "
+          "          device_trust_revoked_at AS user.device_trust_revoked_at, "
+          "          ?feature(user_admin) erased_at AS user.erased_at, "
+          "          ?feature(marketing_consent) marketing_consent AS user.marketing_consent, "
+          "          ?feature(marketing_consent) marketing_consent_at AS user.marketing_consent_at, "
+          "          ?feature(bot_token_guard) allowed_cidrs AS user.allowed_cidrs, "
+          "          sign_in_failures AS user.sign_in_failures, "
+          "          sign_in_window_at AS user.sign_in_window_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "AccountCreated"
+      payload: {
+        fields: [
+          { key: "user_id",    value: "$response.user.id" },
+          { key: "email",      value: "$response.user.email" },
+          { key: "created_by", value: "$request.created_by" },
+          { key: "device_id",  value: "$request.thumbprint" }
+        ]
+      }
+    };
+  }
+
+  // CreateAccountSetup — store a setup link's hash for an account.
+  rpc CreateAccountSetup(CreateAccountSetupReq) returns (CreateAccountSetupResp) {
+    option (w17.contrib.plugin_feature_rpc) = "admin_accounts";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.AccountSetup SET "
+          "user_id = :user_id, "
+          "token_hash = :token_hash, "
+          "expires_at = :expires_at, "
+          "created_by = :created_by "
+          "RETURNING id"
+      }
+    };
+  }
+
+  // SupersedeAccountSetups — end every live setup link of an account, before
+  // a new one is issued: one link works at a time. No row is the ordinary
+  // answer for an account's first link.
+  rpc SupersedeAccountSetups(SupersedeAccountSetupsReq) returns (SupersedeAccountSetupsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "admin_accounts";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.AccountSetup SET "
+          "superseded_at = NOW() "
+          "WHERE user_id = :user_id AND used_at IS NULL AND superseded_at IS NULL "
+          "RETURNING id"
+      }
+    };
+  }
+
+  // ConsumeAccountSetup — spend a live setup link: the statement that marks
+  // it used is the one that finds it, so two requests with one link cannot
+  // both set a password. A spent, superseded, lapsed or unknown link is
+  // NotFound.
+  rpc ConsumeAccountSetup(ConsumeAccountSetupReq) returns (ConsumeAccountSetupResp) {
+    option (w17.contrib.plugin_feature_rpc) = "admin_accounts";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.AccountSetup SET "
+          "used_at = NOW() "
+          "WHERE token_hash = :token_hash AND used_at IS NULL AND superseded_at IS NULL "
+          "AND expires_at > NOW() "
+          "RETURNING user_id"
+      }
+    };
+  }
+
+  // SetUpAccountPassword — give an account its FIRST password: only while it
+  // has none ('!'), so a setup link can never overwrite a password its owner
+  // chose, and never an erased account's (erasure leaves '!' too — a link
+  // issued before the erasure must not bring the account back). No row is
+  // NotFound.
+  rpc SetUpAccountPassword(SetUpAccountPasswordReq) returns (SetUpAccountPasswordResp) {
+    option (w17.contrib.plugin_feature_rpc) = "admin_accounts";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.User SET "
+          "password_hash = :password_hash "
+          "WHERE id = :user_id AND password_hash = \'!\' AND erased_at IS NULL "
+          "RETURNING id AS user_id"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "AccountSetUp"
+      payload: {
+        fields: [
+          { key: "user_id",   value: "$response.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
+      }
+    };
+  }
+
+}
+
+message CreateAdminUserReq {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  // event-only (no w17.field: not persisted, not validated): the operator who
+  // created the account and the key thumbprint of their device,
+  // AccountCreated's created_by and device_id.
+  string created_by = 2;
+  string thumbprint = 3;
+}
+message CreateAdminUserResp {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  User user = 1;
+}
+message CreateAccountSetupReq {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  string token_hash = 2 [(w17.field) = { type: CHAR, max_len: 128 }];
+  google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
+  string created_by = 4 [(w17.field) = { type: UUID, null: true }];
+}
+message CreateAccountSetupResp {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string id = 1;
+}
+message SupersedeAccountSetupsReq {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message SupersedeAccountSetupsResp {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string id = 1;
+}
+message ConsumeAccountSetupReq {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  // sha256 hex of the token the link carried.
+  string token_hash = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
+}
+message ConsumeAccountSetupResp {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string user_id = 1;
+}
+message SetUpAccountPasswordReq {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  // Already hashed (passwordhash.Settings.Hash), as CreateUser's.
+  string password_hash = 2 [(w17.field) = { type: PASSWORD }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that set the password, AccountSetUp's device_id.
+  string thumbprint = 3;
+}
+message SetUpAccountPasswordResp {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string user_id = 1;
 }

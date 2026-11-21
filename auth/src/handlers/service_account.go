@@ -358,12 +358,35 @@ type botOrgScope struct {
 	accounts func(ctx context.Context, h *AuthServiceHandler) ([]*pb.User, error)
 	// isMember reports whether userID is a member of the caller's organization.
 	isMember func(ctx context.Context, h *AuthServiceHandler, userID string) (bool, error)
+	// isMemberOf reports whether userID is a member of orgID.
+	isMemberOf func(ctx context.Context, h *AuthServiceHandler, userID, orgID string) (bool, error)
 	// lock takes orgID's row lock inside the caller's transaction — the one
 	// every change to who holds what in the organization takes first
 	// (withOrgLock) — and answers txCtx marked as under it, as withOrgLock
 	// marks its own: the ceiling re-checked there reads the caller's grants
 	// as they are now (heldNow).
 	lock func(h *AuthServiceHandler, txCtx context.Context, orgID string) (context.Context, error)
+}
+
+// botOrgKey marks a context whose machine-account calls act in a NAMED
+// organization rather than the caller's active one: the admin's realm-wide
+// methods (admin_accounts) set it, having resolved the organization and
+// passed their own gate — an operator acting realm-wide is in no
+// organization. Nothing a request carries can set it.
+type botOrgKey struct{}
+
+// withBotOrg is ctx acting in orgID for the machine-account calls.
+func withBotOrg(ctx context.Context, orgID string) context.Context {
+	return context.WithValue(ctx, botOrgKey{}, orgID)
+}
+
+// botOrgIn is the organization a machine-account call acts in: the named one
+// (withBotOrg), else the caller's active one.
+func botOrgIn(ctx context.Context, orgs *botOrgScope) (string, error) {
+	if orgID, ok := ctx.Value(botOrgKey{}).(string); ok {
+		return orgID, nil
+	}
+	return orgs.active(ctx)
 }
 
 // underBotOrgLock is the start of a machine-account transaction whose
@@ -381,7 +404,7 @@ func (h *AuthServiceHandler) underBotOrgLock(txCtx context.Context) (context.Con
 	if err != nil || orgs == nil || orgs.lock == nil {
 		return txCtx, err
 	}
-	orgID, err := orgs.active(txCtx)
+	orgID, err := botOrgIn(txCtx, orgs)
 	if err != nil {
 		return nil, err
 	}
@@ -511,7 +534,7 @@ func (h *AuthServiceHandler) CreateBot(ctx context.Context, req *pb.CreateBotReq
 	var orgID string
 	if orgs != nil {
 		var orgErr error
-		if orgID, orgErr = orgs.active(ctx); orgErr != nil {
+		if orgID, orgErr = botOrgIn(ctx, orgs); orgErr != nil {
 			return nil, status.Error(codes.FailedPrecondition,
 				"select an organization before creating a machine account — its role is granted inside one")
 		}
@@ -668,7 +691,12 @@ func (h *AuthServiceHandler) operableBot(ctx context.Context, target string) (*p
 		return nil, err
 	}
 	if orgs != nil {
-		inOrg, err := orgs.isMember(ctx, h, target)
+		var inOrg bool
+		if orgID, named := ctx.Value(botOrgKey{}).(string); named {
+			inOrg, err = orgs.isMemberOf(ctx, h, target, orgID)
+		} else {
+			inOrg, err = orgs.isMember(ctx, h, target)
+		}
 		if err != nil {
 			return nil, err
 		}
