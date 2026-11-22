@@ -25,6 +25,7 @@ import (
 
 const (
 	testProxyAddress = "relay-a.example.com:9000"
+	testInternalAddr = "relay:9000"
 	testProxyFP      = "cafe01"
 )
 
@@ -51,6 +52,7 @@ func configured(t *testing.T, pool *relaycore.Pool) *Server {
 		Workers:          deliveredRegistry(),
 		Codes:            codes,
 		ProxyAddress:     testProxyAddress,
+		InternalAddress:  testInternalAddr,
 		ProxyFingerprint: testProxyFP,
 	}
 }
@@ -168,8 +170,8 @@ func TestServer_ScheduleTaskQueuesThenGrantsAUsableTicket(t *testing.T) {
 	if g == nil {
 		t.Fatalf("second event %v, want a grant", ev)
 	}
-	if g.GetAddress() != testProxyAddress || g.GetCertFingerprint() != testProxyFP || g.GetRelay() != "" {
-		t.Errorf("grant = %+v, want the configured address and fingerprint and no relay name", g)
+	if g.GetAddress() != testProxyAddress || g.GetInternalAddress() != testInternalAddr || g.GetCertFingerprint() != testProxyFP || g.GetRelay() != "" {
+		t.Errorf("grant = %+v, want the configured addresses and fingerprint and no relay name", g)
 	}
 	if !g.GetExpiresAt().AsTime().After(time.Now()) {
 		t.Errorf("expires_at %v is not in the future", g.GetExpiresAt().AsTime())

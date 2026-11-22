@@ -81,7 +81,9 @@ comments still refer to it (see `base` registry gap 3). No `go_files_combined`.
 **Relay configuration** (flags, each defaulted from a `RELAY_*` variable):
 listeners `--listen` (management, 13444), `--attach-listen` (13446),
 `--tunnel-listen` (13445), `--proxy-listen` (callers, 9000); `--proxy-address`
-and `--control-plane-fingerprint` (required); identity `--cert/--key` or
+and `--control-plane-fingerprint` (required); `--internal-address` (optional:
+the callers endpoint on the relay's own network, handed out beside
+`--proxy-address` as `TaskGranted.internal_address`); identity `--cert/--key` or
 `--identity-dir`; worker CA `--ca-cert/--ca-key` or `--identity-dir`;
 `--capacity` (optional ceiling, 0 = none), `--max-worker-slots` (64, 1–65536:
 the most slots one worker is credited with), `--max-queue` (1000, at least 1),
@@ -133,6 +135,18 @@ sandbox's wiring is (an identity minted in the container, lost on `down`).
      `RELAY_CONTROL_PLANE_FINGERPRINT`, publishing only the callers port;
   6. register the relay on the Relays page (its management address and the
      fingerprint from step 2).
+
+**Callers in the same stack.** A grant carries the public address
+(`address`) and, from a relay told one, the address on its own network
+(`internal_address`; the deploy block sets it to the relay's callers port on
+the stack's network). A caller dials the internal one first and falls back to
+the public one, each pinned to `cert_fingerprint`: `lib/relaydial.DialGranted`
+does both. Dialled from inside the stack, the public address is the host's own
+public IP, which Docker does not translate back into the stack: the packet
+lands on the host firewall's INPUT chain (`docker_gwbridge`), and a
+default-deny host drops it. A caller that dials `address` itself from inside
+the stack needs the host rule `allow in on docker_gwbridge to any port
+<published port>`.
 
 **Worker environment.** One contract between the deploy block and a worker:
 `workerconn.ConfigFromEnv(activation)` reads `W17_<ACTIVATION>_RELAY_ATTACH`,

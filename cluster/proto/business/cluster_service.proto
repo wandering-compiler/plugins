@@ -401,6 +401,18 @@ message TaskGranted {
   // truth about it.
   string address = 2;
 
+  // `host:port` of the same endpoint on the relay's own network: how a caller
+  // running beside the relay (another service of the same stack) reaches it
+  // without leaving the host. Empty when the relay was not told one.
+  //
+  // Dial it FIRST and fall back to `address` (lib/relaydial.DialGranted does
+  // both, pinned). A caller inside the stack that dials the public address
+  // dials its own host's public IP: Docker does not translate that hairpin,
+  // the packet lands in the host firewall's INPUT chain, and a default-deny
+  // host drops it. Outside the stack the name does not resolve and the dial
+  // moves on at once. Same certificate either way, so the same pin.
+  string internal_address = 6;
+
   // Lowercase hex SHA-256 of the certificate the relay's WORK endpoint
   // presents, so the caller can pin what answers at `address`.
   //

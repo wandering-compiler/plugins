@@ -157,6 +157,9 @@ deploy:
         - name: RELAY_PROXY_ADDRESS
           value: "{public:relay.callers}"
           description: "What callers are told to dial, as the internet reaches it."
+        - name: RELAY_INTERNAL_ADDRESS
+          value: "{address:relay.callers}"
+          description: "What a caller in the same stack dials first (TaskGranted.internal_address): the relay on the stack's network, so the call never hairpins through the host's public address and its firewall."
         - name: RELAY_CONTROL_PLANE_FINGERPRINT
           value: "{fingerprint:control-plane}"
           description: "Only the control plane's client certificate may manage this relay."
