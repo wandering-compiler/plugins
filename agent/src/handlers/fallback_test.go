@@ -23,8 +23,8 @@ type byModel struct {
 
 func (b *byModel) NewStreaming(_ context.Context, body responses.ResponseNewParams, _ ...option.RequestOption) *ssestream.Stream[responses.ResponseStreamEventUnion] {
 	b.mu.Lock()
-	b.asked = append(b.asked, string(body.Model))
-	ev := b.events[string(body.Model)]
+	b.asked = append(b.asked, body.Model)
+	ev := b.events[body.Model]
 	b.mu.Unlock()
 	return ssestream.NewStream[responses.ResponseStreamEventUnion](&fakeDecoder{events: ev}, nil)
 }
