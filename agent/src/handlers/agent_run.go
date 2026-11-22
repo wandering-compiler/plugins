@@ -121,8 +121,12 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 				// Every sent turn gets its row, the caller hanging up
 				// included: what was spent before the hang-up was paid for
 				// whether or not anyone is left to hear about it.
+				id := t.Model
+				if id == "" {
+					id = model.ID
+				}
 				h.recordUsageFor(start.GetUsageScope(), start.GetUsageLabels(),
-					model.ID, &llm.Completion{Usage: t.Usage, Status: t.Status}, turnOutcome(t), t.StartedAt)
+					id, &llm.Completion{Usage: t.Usage, Status: t.Status}, turnOutcome(t), t.StartedAt)
 				return nil
 			}
 			return sendRunEvent(send, e)
@@ -360,6 +364,8 @@ func (p *pendingCalls) failAll(err error) {
 
 func sendRunEvent(send func(*pb.RunAgentEvent) error, e llm.RunEvent) error {
 	switch {
+	case e.Restart != nil:
+		return send(&pb.RunAgentEvent{Event: &pb.RunAgentEvent_Restart{Restart: restartOf(e.Restart)}})
 	case e.Delta != "":
 		return send(&pb.RunAgentEvent{Event: &pb.RunAgentEvent_Delta{Delta: &pb.TextDelta{Text: e.Delta}}})
 	case e.ToolStarted != nil:
@@ -478,6 +484,8 @@ func ownSideFailure(err error, msg string) error {
 func runError(err error) error {
 	switch {
 	case errors.Is(err, llm.ErrBudgetExhausted):
+		// The loop answers a spent budget with one round without tools; this
+		// stays for anything that reports the budget past it.
 		return status.Error(codes.ResourceExhausted, "agent: the run exceeded its tool-call budget")
 	case errors.Is(err, llm.ErrTurnsExhausted):
 		return status.Error(codes.DeadlineExceeded, "agent: the model did not finish within the turn limit")

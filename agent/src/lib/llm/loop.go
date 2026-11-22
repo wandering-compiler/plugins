@@ -43,6 +43,10 @@ type RunEvent struct {
 	ToolStarted  *ToolEvent
 	ToolFinished *ToolEvent
 
+	// Restart: the current turn is tried again on the next fallback model;
+	// the deltas sent since the turn began are void.
+	Restart *Restart
+
 	// TurnSpent reports one model call the run SENT, as soon as it ends: what
 	// it cost and how it ended. One per turn, so a recorder can write a row
 	// per call priced when that call ran. A turn refused before the request,
@@ -52,8 +56,25 @@ type RunEvent struct {
 	TurnSpent *TurnSpend
 }
 
+// Restart is a turn retried on a fallback model.
+type Restart struct {
+	Attempt int
+	Reason  string
+	Model   string
+}
+
+// ReasonToolBudgetExhausted is the incomplete reason of a run that spent its
+// tool-call budget and answered without the calls that would have gone over.
+const ReasonToolBudgetExhausted = "tool_budget_exhausted"
+
+// budgetNotice is the result each call of the round over budget gets: the
+// model reads it and answers with what it has.
+const budgetNotice = "Not run: this run's tool-call budget is used up. Answer now with what you already have, and say what is missing."
+
 // TurnSpend is one sent turn's cost.
 type TurnSpend struct {
+	// Model is the model the turn ran on: a fallback's after a Restart.
+	Model string
 	// Usage is what the provider reported; unmeasured when it reported
 	// nothing (a dropped stream, a runaway cut off).
 	Usage Usage
@@ -108,6 +129,13 @@ func Run(
 	if sink == nil {
 		return nil, errors.New("agent: no event sink")
 	}
+	if err := checkFallbacks(m); err != nil {
+		return nil, err
+	}
+	attempts := m.Attempts()
+	current := 0
+	restarts := 0
+	budgetSpent := false
 	byName := make(map[string]Tool, len(tools))
 	for _, t := range tools {
 		// Both refusals below are PREFLIGHT: decided from the request alone,
@@ -180,7 +208,7 @@ func Run(
 		// run ends immediately after — so the model is asked to answer with
 		// what it already has instead.
 		offer := declared
-		if turn == limits.maxTurns()-1 {
+		if turn == limits.maxTurns()-1 || budgetSpent {
 			offer = nil
 		}
 
@@ -200,12 +228,16 @@ func Run(
 		}
 
 		turnStartedAt := time.Now()
-		res, calls, err := completeTurn(ctx, client, m, instructions, history, input, offer, sink)
+		shownMu.Lock()
+		turnMark := shown.Len()
+		shownMu.Unlock()
+		res, calls, err := completeTurn(ctx, client, attempts[current], instructions, history, input, offer, sink)
 		if err != nil {
+			model := attempts[current].ID
 			switch u, ok := SpentBy(err); {
 			case ok:
 				spent.add(u)
-				_ = sink(RunEvent{TurnSpent: &TurnSpend{Usage: u, Failed: true, StartedAt: turnStartedAt}})
+				_ = sink(RunEvent{TurnSpent: &TurnSpend{Model: model, Usage: u, Failed: true, StartedAt: turnStartedAt}})
 			case IsPreflight(err):
 				// Refused before the request: no turn was sent.
 			default:
@@ -213,19 +245,41 @@ func Run(
 				// dropped stream, a runaway cut off, a transport error. The
 				// run's total is then a floor, and says so.
 				spent.add(Usage{})
-				_ = sink(RunEvent{TurnSpent: &TurnSpend{Failed: true, StartedAt: turnStartedAt}})
+				_ = sink(RunEvent{TurnSpent: &TurnSpend{Model: model, Failed: true, StartedAt: turnStartedAt}})
+			}
+			if current+1 < len(attempts) && Fallbackable(ctx, err) {
+				// The provider failed; the next model takes the turn, and the
+				// rest of the run. What this attempt streamed is void: the
+				// reader is told, and the answer's text forgets it.
+				current++
+				restarts++
+				shownMu.Lock()
+				s := shown.String()[:turnMark]
+				shown.Reset()
+				shown.WriteString(s)
+				shownMu.Unlock()
+				if serr := userSink(RunEvent{Restart: &Restart{Attempt: restarts, Reason: FallbackReason(err), Model: attempts[current].ID}}); serr != nil {
+					return nil, withSpent(serr, spent.usage())
+				}
+				turn--
+				continue
 			}
 			return nil, withSpent(err, spent.usage())
 		}
 		spent.add(res.Usage)
-		_ = sink(RunEvent{TurnSpent: &TurnSpend{Usage: res.Usage, Status: res.Status, StartedAt: turnStartedAt}})
+		_ = sink(RunEvent{TurnSpent: &TurnSpend{Model: attempts[current].ID, Usage: res.Usage, Status: res.Status, StartedAt: turnStartedAt}})
 
-		if len(calls) == 0 {
+		if len(calls) == 0 || budgetSpent {
 			answer := *res
 			answer.Usage = spent.usage()
 			shownMu.Lock()
 			answer.Text = shown.String()
 			shownMu.Unlock()
+			if budgetSpent {
+				// Answered without the calls that would have gone over: an
+				// answer, and not the whole one.
+				answer.Status, answer.IncompleteReason = StatusIncomplete, ReasonToolBudgetExhausted
+			}
 			return &answer, nil
 		}
 		if turn == limits.maxTurns()-1 {
@@ -241,6 +295,19 @@ func Run(
 		input = append(input, assistantToolCalls(calls)...)
 
 		out, err := dispatch(ctx, calls, byName, b, limits, sink)
+		if errors.Is(err, ErrBudgetExhausted) {
+			// The round would go over the budget, and none of it ran (the
+			// budget reserves a whole round before the first call). The run
+			// used to fail here, discarding everything the model had already
+			// learned. Instead every call of the round gets the notice as its
+			// result, and the model answers once more without tools.
+			budgetSpent = true
+			out = make([]string, len(calls))
+			for i := range out {
+				out[i] = budgetNotice
+			}
+			err = nil
+		}
 		if err != nil {
 			return nil, withSpent(err, spent.usage())
 		}

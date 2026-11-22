@@ -40,24 +40,45 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 		return status.FromContextError(ctxErr).Err()
 	}
 
-	startedAt := time.Now()
+	if err := llm.CheckFallbacks(m); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
 	// The transport's own failure, kept so it can be told apart from the
 	// model's below.
 	var sendErr error
-	out, err := llm.CompleteStream(srv.Context(), h.StreamClient, m,
-		req.GetInstructions(), messagesFrom(req.GetMessages()),
-		func(text string) error {
-			// A send failure is the client going away, and it is returned so
-			// the call ABORTS: continuing would keep paying the provider for
-			// tokens with nowhere to put them.
-			if sErr := srv.Send(&pb.CompleteEvent{
-				Event: &pb.CompleteEvent_Delta{Delta: &pb.TextDelta{Text: text}},
-			}); sErr != nil {
-				sendErr = sErr
-				return sErr
-			}
-			return nil
-		})
+	var out *llm.Completion
+	var startedAt time.Time
+	attempts := m.Attempts()
+	for i, a := range attempts {
+		m = a
+		startedAt = time.Now()
+		out, err = llm.CompleteStream(srv.Context(), h.StreamClient, m,
+			req.GetInstructions(), messagesFrom(req.GetMessages()),
+			func(text string) error {
+				// A send failure is the client going away, and it is returned so
+				// the call ABORTS: continuing would keep paying the provider for
+				// tokens with nowhere to put them.
+				if sErr := srv.Send(&pb.CompleteEvent{
+					Event: &pb.CompleteEvent_Delta{Delta: &pb.TextDelta{Text: text}},
+				}); sErr != nil {
+					sendErr = sErr
+					return sErr
+				}
+				return nil
+			})
+		// The provider failed (not the client, not a limit): the next model is
+		// tried, after telling the client that what it was sent is void.
+		if err == nil || sendErr != nil || i+1 == len(attempts) || !llm.Fallbackable(srv.Context(), err) {
+			break
+		}
+		h.recordUsage(req, m.ID, spentOn(out, err), OutcomeFailed, startedAt)
+		log.Printf("agent: model stream failed (model %q), trying fallback %q: %s", m.ID, attempts[i+1].ID, llm.ProviderLogLine(err))
+		if sErr := srv.Send(&pb.CompleteEvent{Event: &pb.CompleteEvent_Restart{Restart: restartOf(&llm.Restart{
+			Attempt: i + 1, Reason: llm.FallbackReason(err), Model: attempts[i+1].ID,
+		})}}); sErr != nil {
+			return sErr
+		}
+	}
 	if err != nil {
 		// BEFORE the usage row, not after it. A preflight refusal never reached
 		// the provider, so there is nothing to have paid for — recording one
