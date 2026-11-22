@@ -61,6 +61,11 @@ type Server struct {
 	// relay can only be told.
 	ProxyAddress string
 
+	// InternalAddress is `host:port` of the same endpoint on the relay's own
+	// network, for a caller beside it (TaskGranted.internal_address). Empty:
+	// callers get the public address alone.
+	InternalAddress string
+
 	// PollInterval is what a polled reservation is told as poll_after_ms.
 	// Zero uses relaycore.DefaultPollInterval. Keep it well inside the pool's
 	// PollTimeout, or obedient clients get abandoned.
@@ -87,6 +92,7 @@ func (s *Server) misconfigured() error {
 func (s *Server) granted(g relaycore.Grant) *pb.TaskGranted {
 	return &pb.TaskGranted{
 		Address:         s.ProxyAddress,
+		InternalAddress: s.InternalAddress,
 		CertFingerprint: s.ProxyFingerprint,
 		Ticket:          g.Ticket,
 		ExpiresAt:       timestamppb.New(g.ExpiresAt),
