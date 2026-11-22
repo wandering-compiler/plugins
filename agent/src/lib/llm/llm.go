@@ -116,6 +116,10 @@ type Model struct {
 	// repairing model output, which is where a wrong answer stops looking
 	// wrong.
 	JSONObject bool
+
+	// Fallbacks are tried, in order, when a call on this model fails at the
+	// provider (Fallbackable). One level: a fallback's own are refused.
+	Fallbacks []Model
 }
 
 // Message is one thing somebody said.

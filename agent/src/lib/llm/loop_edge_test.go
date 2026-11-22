@@ -65,14 +65,15 @@ func TestRun_AFailedRunStillCarriesWhatItSpent(t *testing.T) {
 		}
 	})
 	t.Run("over budget after a paid turn", func(t *testing.T) {
-		_, err := runWith(t, [][]map[string]any{
+		out, err := runWith(t, [][]map[string]any{
 			{usageTurn([][3]string{{"a", "t", `{}`}, {"b", "t", `{}`}}, 40, 2)},
+			{delta("x"), completed(StatusCompleted, "", 8)},
 		}, []Tool{&testTool{name: "t"}}, Limits{MaxToolCalls: 1}, nil)
-		if !errors.Is(err, ErrBudgetExhausted) {
+		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
-		if spent, ok := SpentBy(err); !ok || spent.TotalTokens != 42 {
-			t.Errorf("SpentBy = %+v, %v — the turn that asked for too many tools was still paid for", spent, ok)
+		if out.Usage.TotalTokens != 50 {
+			t.Errorf("usage = %+v — the turn that asked for too many tools is paid for, and the answer after it", out.Usage)
 		}
 	})
 	t.Run("a provider failure on the second turn", func(t *testing.T) {

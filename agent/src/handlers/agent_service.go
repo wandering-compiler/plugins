@@ -81,8 +81,25 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 		return nil, status.FromContextError(ctxErr).Err()
 	}
 
-	startedAt := time.Now()
-	out, err := llm.Complete(ctx, h.Client, m, req.GetInstructions(), messagesFrom(req.GetMessages()))
+	if err := llm.CheckFallbacks(m); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	// The model, then its fallbacks: the next one is tried when the PROVIDER
+	// failed (llm.Fallbackable). Every attempt is a call, recorded under its
+	// own model below.
+	attempts := m.Attempts()
+	var out *llm.Completion
+	var startedAt time.Time
+	for i, a := range attempts {
+		m = a
+		startedAt = time.Now()
+		out, err = llm.Complete(ctx, h.Client, m, req.GetInstructions(), messagesFrom(req.GetMessages()))
+		if err == nil || i+1 == len(attempts) || !llm.Fallbackable(ctx, err) {
+			break
+		}
+		h.recordUsage(req, m.ID, spentOn(out, err), OutcomeFailed, startedAt)
+		log.Printf("agent: model call failed (model %q), trying fallback %q: %s", m.ID, attempts[i+1].ID, llm.ProviderLogLine(err))
+	}
 	if err != nil {
 		// Recorded even though the call failed: a refused or timed-out
 		// completion can still have spent tokens at the provider, and a bill
@@ -141,6 +158,26 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 // modelFor resolves the model from the request, falling back to the
 // deployment's defaults for whatever it leaves empty.
 func (h *AgentServiceHandler) modelFor(req *pb.CompleteReq) llm.Model {
+	m := h.modelOfSpec(req)
+	for _, f := range req.GetModel().GetFallbacks() {
+		fb := h.modelOfSpec(&pb.CompleteReq{Model: f, ResponseFormat: req.GetResponseFormat()})
+		// Kept as written, its own fallbacks included, so the LLM layer can
+		// refuse a nested list instead of it being dropped here.
+		for range f.GetFallbacks() {
+			fb.Fallbacks = append(fb.Fallbacks, llm.Model{})
+		}
+		m.Fallbacks = append(m.Fallbacks, fb)
+	}
+	return m
+}
+
+// restartOf is a Restart as the wire carries it.
+func restartOf(r *llm.Restart) *pb.Restart {
+	return &pb.Restart{Attempt: int32(r.Attempt), Reason: r.Reason, Model: r.Model}
+}
+
+// modelOfSpec is the model one spec names, without its fallbacks.
+func (h *AgentServiceHandler) modelOfSpec(req *pb.CompleteReq) llm.Model {
 	m := llm.Model{ID: h.DefaultModel, MaxTokens: h.DefaultMaxTokens}
 	// The response format is a property of the REQUEST, not of the model spec,
 	// so it is read before the spec is. It used to be set below the early
@@ -245,6 +282,8 @@ func reasonOf(r string) pb.IncompleteReason {
 		return pb.IncompleteReason_INCOMPLETE_REASON_MAX_OUTPUT_TOKENS
 	case llm.ReasonContentFilter:
 		return pb.IncompleteReason_INCOMPLETE_REASON_CONTENT_FILTER
+	case llm.ReasonToolBudgetExhausted:
+		return pb.IncompleteReason_INCOMPLETE_REASON_TOOL_BUDGET_EXHAUSTED
 	default:
 		return pb.IncompleteReason_INCOMPLETE_REASON_UNSPECIFIED
 	}

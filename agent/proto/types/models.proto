@@ -72,6 +72,21 @@ message ModelSpec {
   // config, which is exactly when nobody expects to lose a guarantee. If you
   // need it, say so: routing sampling calls through chat-completions is the
   // known answer and it is a decision, not an oversight.
+
+  // Models to try, in order, when a call on this one fails at the PROVIDER:
+  // rate-limited (429), failing (5xx, or a response it marked `server_error`
+  // / `rate_limit_exceeded`), or unreachable (a dropped connection). Not when
+  // it REFUSED the request (another 4xx — the next model would refuse it
+  // too), not on a preflight refusal, and not when the caller's own context
+  // ended. The SDK has already retried the same model by then.
+  //
+  // Each is a model spec of its own (id, max_tokens, effort, temperature); a
+  // fallback's own `fallbacks` are refused. Complete tries the next one in
+  // place. CompleteStream and RunAgent first send a `Restart` event — the
+  // partial output of the failed attempt is void — and RunAgent stays on the
+  // model it fell back to for the rest of the run. Every attempt is a model
+  // call: each is recorded under its own model, the failed ones included.
+  repeated ModelSpec fallbacks = 6;
 }
 
 enum Effort {
@@ -146,4 +161,25 @@ enum IncompleteReason {
   INCOMPLETE_REASON_MAX_OUTPUT_TOKENS = 1;
   // The provider's content filter objected.
   INCOMPLETE_REASON_CONTENT_FILTER = 2;
+  // RunAgent: the run spent its tool-call budget (`Limits.max_tool_calls`).
+  // The calls of the round that would have gone over were NOT run — the model
+  // was told so and answered once more without tools, with what it had.
+  INCOMPLETE_REASON_TOOL_BUDGET_EXHAUSTED = 3;
+}
+
+// Restart: the call is being tried again — on the next of the model spec's
+// `fallbacks`, after the provider failed. Everything streamed since the
+// previous Restart (or since the start of the attempt that failed) is VOID:
+// a client that shows deltas as they arrive drops them and shows what comes
+// next instead. A RunAgent tool call already answered in an earlier turn is
+// not repeated.
+message Restart {
+  // 1 for the first retry, 2 for the second, …
+  int32 attempt = 1;
+  // Why the previous attempt failed, as the provider classified it
+  // ("HTTP 503", "rate limited", "response failed, code server_error",
+  // "connection failed"). Display-safe: no body, no prompt.
+  string reason = 2;
+  // The model this attempt runs on.
+  string model = 3;
 }
