@@ -343,7 +343,7 @@ func (h *ClusterServiceHandler) DrainRelay(ctx context.Context, req *pb.DrainRel
 	for _, id := range req.GetIds() {
 		r, err := h.Relays.Get(ctx, id)
 		if errors.Is(err, ErrRelayNotFound) {
-			return nil, status.Errorf(codes.NotFound, "cluster: no relay %q is registered", id)
+			return nil, relayNotFound(ctx, "ClusterService.DrainRelay", id)
 		}
 		if err != nil {
 			return nil, grpcerr.ReplaySafe(status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err))

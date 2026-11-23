@@ -769,7 +769,7 @@ var errNoActiveOrg = status.Error(codes.FailedPrecondition,
 func activeOrgID(ctx context.Context) (string, error) {
 	orgID, ok := principal.Scope(ctx, "org_id")
 	if !ok || orgID == "" {
-		return "", errNoActiveOrg
+		return "", refuseAs(ctx, codes.FailedPrecondition, errNoActiveOrg, CodeOrganizationRequired, "", MsgOrganizationRequired, nil)
 	}
 	return orgID, nil
 }

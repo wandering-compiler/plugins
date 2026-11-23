@@ -112,6 +112,11 @@ func (h *AuthServiceHandler) UpdateAccount(ctx context.Context, req *pb.UpdateAc
 var errEmptySelection = status.Error(codes.InvalidArgument,
 	"select the rows to act on: an empty selection would apply to every row, which this action does not do")
 
+// emptySelection is errEmptySelection with the person's sentence.
+func emptySelection(ctx context.Context) error {
+	return refuseAs(ctx, codes.InvalidArgument, errEmptySelection, CodeEmptySelection, "", MsgEmptySelection, nil)
+}
+
 // EraseUsers erases each selected account (GDPR) without deleting anything —
 // the bulk form of EraseAccount, for project code. Account by account: with a
 // transaction coordinator each account is one transaction, so one that fails
@@ -125,7 +130,7 @@ func (h *AuthServiceHandler) EraseUsers(ctx context.Context, req *pb.EraseUsersR
 		return nil, Unauthenticated(err)
 	}
 	if len(req.GetIds()) == 0 {
-		return nil, errEmptySelection
+		return nil, emptySelection(ctx)
 	}
 	if err := refuseOwnAccount(ctx, operator, req.GetIds()); err != nil {
 		return nil, err
@@ -265,7 +270,7 @@ func (h *AuthServiceHandler) RevokeDevices(ctx context.Context, req *pb.RevokeDe
 		return nil, Unauthenticated(err)
 	}
 	if len(req.GetIds()) == 0 {
-		return nil, errEmptySelection
+		return nil, emptySelection(ctx)
 	}
 	for _, id := range req.GetIds() {
 		dev, err := h.Query.GetDevice(ctx, &pb.GetDeviceReq{Id: id})
@@ -323,7 +328,7 @@ func (h *AuthServiceHandler) RevokeSessions(ctx context.Context, req *pb.RevokeS
 		return nil, Unauthenticated(err)
 	}
 	if len(req.GetIds()) == 0 {
-		return nil, errEmptySelection
+		return nil, emptySelection(ctx)
 	}
 	for _, id := range req.GetIds() {
 		if _, err := h.Mutation.RevokeUserToken(ctx, &pb.RevokeUserTokenReq{Id: id, RevokedBy: operator, Thumbprint: requestThumbprint(ctx)}); notFoundOK(err) != nil {

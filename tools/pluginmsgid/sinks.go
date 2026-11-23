@@ -15,7 +15,9 @@ import (
 // sinks are the calls that put a sentence in front of a person, and the
 // argument that sentence is: grpcerr.ForUser / ForUserWith (userMsgid),
 // grpcerr.OnEmpty (userMsgid), i18n.T (msgid) — and a struct literal's
-// `userMsg:` field, the auth plugin's own channel to the same detail.
+// `userMsg:` field, the auth plugin's own channel to the same detail — and
+// any function of the plugin's own package whose parameter is named one of
+// msgParams (a local helper like auth's refusal(ctx, …, msgid, …)).
 //
 // A sentence passed to one of them that is NOT a //w17:msgid constant reaches
 // a person and no catalog: English in every locale, and nothing reports it.
@@ -72,6 +74,10 @@ func unmarkedSentences(root string) ([]string, error) {
 	return out, nil
 }
 
+// msgParams are the parameter names that mark a local helper's argument as
+// a sentence for a person.
+var msgParams = map[string]bool{"msgid": true, "userMsgid": true, "userMsg": true}
+
 func unmarkedInPackage(paths []string) ([]string, error) {
 	fset := token.NewFileSet()
 	var files []*ast.File
@@ -104,6 +110,30 @@ func unmarkedInPackage(paths []string) ([]string, error) {
 			}
 		}
 	}
+	// The package's own helpers that take a sentence, by name → arg index.
+	local := map[string]int{}
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil || fd.Type.Params == nil {
+				continue
+			}
+			i := 0
+			for _, field := range fd.Type.Params.List {
+				names := field.Names
+				if len(names) == 0 {
+					i++
+					continue
+				}
+				for _, n := range names {
+					if msgParams[n.Name] {
+						local[fd.Name.Name] = i
+					}
+					i++
+				}
+			}
+		}
+	}
 	var out []string
 	check := func(arg ast.Expr, fn string) {
 		where := fset.Position(arg.Pos()).String()
@@ -128,6 +158,12 @@ func unmarkedInPackage(paths []string) ([]string, error) {
 			}
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
+				return true
+			}
+			if id, ok := call.Fun.(*ast.Ident); ok {
+				if idx, ok := local[id.Name]; ok && idx < len(call.Args) {
+					check(call.Args[idx], id.Name)
+				}
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -113,7 +114,7 @@ func TestInviteToOrgAdmin_TheBackofficeInvitesIntoTheNamedOrganization(t *testin
 // anywhere.
 func TestInviteToOrg_StaysInTheActiveOrganization(t *testing.T) {
 	h, m := realmInviteHandler(true)
-	if _, err := h.InviteToOrg(ctxWithCaller("ops"), &pb.InviteToOrgReq{Org: "acme", Role: "member"}); err != errNoActiveOrg || m.storedOrg != "" {
+	if _, err := h.InviteToOrg(ctxWithCaller("ops"), &pb.InviteToOrgReq{Org: "acme", Role: "member"}); !errors.Is(err, errNoActiveOrg) || m.storedOrg != "" {
 		t.Errorf("no active organization, naming acme: err = %v, stored in %q — want the no-active-organization refusal", err, m.storedOrg)
 	}
 	if _, err := h.InviteToOrg(ctxWithCallerInOrg("u1", "org-1"), &pb.InviteToOrgReq{Email: "x@corp.example", Role: "member"}); err != nil || m.storedOrg != "org-1" {

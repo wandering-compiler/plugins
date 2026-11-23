@@ -231,7 +231,7 @@ func (h *AuthServiceHandler) checkRoleWithinSnapshot(ctx context.Context, roleID
 		return err
 	}
 	if !within {
-		return status.Error(codes.FailedPrecondition, errRoleMovedSinceInvite.Error())
+		return refusal(ctx, codes.FailedPrecondition, errRoleMovedSinceInvite.Error(), CodeInviteRoleChanged, "", MsgInviteRoleChanged, nil)
 	}
 	return nil
 }

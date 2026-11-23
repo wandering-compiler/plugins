@@ -402,8 +402,9 @@ func (h *ClusterServiceHandler) IssueRegistrationCode(
 	ctx context.Context, req *pb.IssueRegistrationCodeReq,
 ) (*pb.IssueRegistrationCodeResp, error) {
 	if len(req.GetIds()) != 1 {
-		return nil, status.Errorf(codes.InvalidArgument,
-			"cluster: a registration code is for exactly one relay, %d were selected", len(req.GetIds()))
+		return nil, grpcerr.ForUser(ctx, codes.InvalidArgument, "ClusterService.IssueRegistrationCode",
+			fmt.Sprintf("cluster: a registration code is for exactly one relay, %d were selected", len(req.GetIds())),
+			CodeSelectOneRelay, MsgSelectOneRelay)
 	}
 	ctx, err := h.withBans(ctx)
 	if err != nil {
@@ -411,7 +412,7 @@ func (h *ClusterServiceHandler) IssueRegistrationCode(
 	}
 	r, err := h.Relays.Get(ctx, req.GetIds()[0])
 	if errors.Is(err, ErrRelayNotFound) {
-		return nil, status.Errorf(codes.NotFound, "cluster: no relay %q is registered", req.GetIds()[0])
+		return nil, relayNotFound(ctx, "ClusterService.IssueRegistrationCode", req.GetIds()[0])
 	}
 	if err != nil {
 		return nil, grpcerr.ReplaySafe(status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err))

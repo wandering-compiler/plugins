@@ -16,6 +16,7 @@ import (
 	"github.com/wandering-compiler/plugins/payment/lib/backend/stripe"
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 )
 
 // init wires the subscription webhook reconciler. Present only when the
@@ -236,7 +237,7 @@ func (h *PaymentServiceHandler) CreatePlan(ctx context.Context, req *pb.DefinePl
 		IdempotencyKey: scopedKey("plan", h.installID(), slug, name, strconv.FormatInt(amount, 10), currency, req.GetInterval()),
 	})
 	if err != nil {
-		return nil, providerFailure(err)
+		return nil, providerFailure(ctx, err)
 	}
 
 	created, err := h.Mutation.CreatePlan(ctx, &pb.CreatePlanReq{
@@ -298,7 +299,7 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 	}
 	plan := planResp.GetPlan()
 	if plan == nil {
-		return nil, notFound("plan not found")
+		return nil, grpcerr.ForUser(ctx, codes.NotFound, methodPrefix, "plan not found", codePlanNotFound, MsgPlanNotFound)
 	}
 	if plan.GetProviderPriceId() == "" {
 		return nil, invalidArg("plan has no provider price (not pushed to provider)")
@@ -347,13 +348,13 @@ func (h *PaymentServiceHandler) subscribeLocked(ctx, txCtx context.Context, req 
 	// was recorded. The key in the subscription's metadata recognises it.
 	res, found, err := h.Backend.FindSubscription(ctx, cust.GetProviderCustomerId(), req.GetIdempotencyKey())
 	if err != nil {
-		return nil, false, false, providerFailure(err)
+		return nil, false, false, providerFailure(ctx, err)
 	}
 	if found && res.ProviderPriceID != plan.GetProviderPriceId() {
 		// The key names a subscription to another plan, which the provider's
 		// idempotency check would refuse too. Recording it would file that
 		// subscription under this plan.
-		return nil, false, false, status.Error(codes.AlreadyExists, "idempotency_key already used for a different subscription")
+		return nil, false, false, grpcerr.ForUser(ctx, codes.AlreadyExists, methodPrefix, "idempotency_key already used for a different subscription", codeRequestReused, MsgRequestReused)
 	}
 	if found {
 		view, wrote, err := h.recordSubscription(ctx, txCtx, cust, plan, res)
@@ -377,7 +378,7 @@ func (h *PaymentServiceHandler) subscribeLocked(ctx, txCtx context.Context, req 
 		if st == pb.Subscription_INCOMPLETE {
 			obj, err := h.Backend.GetSubscription(ctx, o.GetProviderSubscriptionId())
 			if err != nil {
-				return nil, false, false, providerFailure(err)
+				return nil, false, false, providerFailure(ctx, err)
 			}
 			if obj.Status == "incomplete" && obj.ClientSecret != "" {
 				row, err := h.subscriptionByProviderID(ctx, o.GetProviderSubscriptionId())
@@ -398,12 +399,14 @@ func (h *PaymentServiceHandler) subscribeLocked(ctx, txCtx context.Context, req 
 			}
 			if st == pb.Subscription_INCOMPLETE {
 				// Waiting for a payment the provider gives no secret for.
-				return nil, false, false, status.Errorf(codes.FailedPrecondition,
-					"the principal's subscription to plan %q awaits a payment that cannot be confirmed from here", plan.GetSlug())
+				return nil, false, false, grpcerr.ForUser(ctx, codes.FailedPrecondition, methodPrefix,
+					fmt.Sprintf("the principal's subscription to plan %q awaits a payment that cannot be confirmed from here", plan.GetSlug()),
+					codeSubscriptionPending, MsgSubscriptionPending)
 			}
 		}
-		return nil, false, false, status.Errorf(codes.AlreadyExists,
-			"the principal is already subscribed to plan %q (%s)", plan.GetSlug(), st)
+		return nil, false, false, grpcerr.ForUser(ctx, codes.AlreadyExists, methodPrefix,
+			fmt.Sprintf("the principal is already subscribed to plan %q (%s)", plan.GetSlug(), st),
+			codeAlreadySubscribed, MsgAlreadySubscribed)
 	}
 
 	res, err = h.Backend.StartSubscription(ctx, backend.SubscriptionSpec{
@@ -413,7 +416,7 @@ func (h *PaymentServiceHandler) subscribeLocked(ctx, txCtx context.Context, req 
 		Install:            h.installID(),
 	})
 	if err != nil {
-		return nil, false, false, providerFailure(err)
+		return nil, false, false, providerFailure(ctx, err)
 	}
 	view, wrote, err = h.recordSubscription(ctx, txCtx, cust, plan, res)
 	if err != nil {
@@ -452,7 +455,7 @@ func (h *PaymentServiceHandler) recordSubscription(ctx, writeCtx context.Context
 		if sub := got.GetSubscription(); sub != nil && sub.GetCustomerId() == cust.GetId() {
 			return &pb.SubscriptionView{Subscription: sub}, false, nil
 		}
-		return nil, false, status.Error(codes.AlreadyExists, "idempotency_key already used for a different subscription")
+		return nil, false, grpcerr.ForUser(ctx, codes.AlreadyExists, methodPrefix, "idempotency_key already used for a different subscription", codeRequestReused, MsgRequestReused)
 	}
 	return nil, false, err
 }
@@ -467,7 +470,7 @@ func (h *PaymentServiceHandler) withPendingPayment(ctx context.Context, view *pb
 	}
 	obj, err := h.Backend.GetSubscription(ctx, view.GetSubscription().GetProviderSubscriptionId())
 	if err != nil {
-		return nil, providerFailure(err)
+		return nil, providerFailure(ctx, err)
 	}
 	view.ClientSecret = obj.ClientSecret
 	return view, nil

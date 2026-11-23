@@ -31,8 +31,13 @@ func (h *ClusterServiceHandler) UnbanWorkers(ctx context.Context, req *pb.Decide
 // principal and never taken from the request: a field the client filled could
 // name anyone.
 func (h *ClusterServiceHandler) decide(ctx context.Context, req *pb.DecideWorkersActionReq, ban bool) (*pb.DecideWorkersActionResp, error) {
+	method := "ClusterService.UnbanWorkers"
+	if ban {
+		method = "ClusterService.BanWorkers"
+	}
 	if len(req.GetIds()) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "cluster: select at least one worker")
+		return nil, grpcerr.ForUser(ctx, codes.InvalidArgument, method,
+			"cluster: select at least one worker", CodeSelectWorker, MsgSelectWorker)
 	}
 	var who pb.Caller
 	if err := principal.Envelope(ctx, &who); err != nil || who.GetUserId() == "" {
@@ -53,9 +58,10 @@ func (h *ClusterServiceHandler) decide(ctx context.Context, req *pb.DecideWorker
 		}
 	}
 	if len(unknown) > 0 {
-		return nil, status.Errorf(codes.NotFound,
-			"cluster: no worker %s is registered — nothing was decided; refresh the list and select again",
-			strings.Join(unknown, ", "))
+		return nil, grpcerr.ForUser(ctx, codes.NotFound, method,
+			fmt.Sprintf("cluster: no worker %s is registered — nothing was decided; refresh the list and select again",
+				strings.Join(unknown, ", ")),
+			CodeWorkerNotFound, MsgWorkerNotFound)
 	}
 	if err := h.Workers.Decide(ctx, req.GetIds(), ban, who.GetUserId()); err != nil {
 		return nil, err

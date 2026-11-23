@@ -125,7 +125,7 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 	attempt.named(bot.GetEmail())
 	if err := signInDisabledGate(bot); err != nil {
 		attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_ACCOUNT_DISABLED
-		return nil, status.Error(codes.FailedPrecondition, "machine account is disabled; enable it first")
+		return nil, refusal(ctx, codes.FailedPrecondition, "machine account is disabled; enable it first", CodeBotDisabled, "", MsgBotDisabled, nil)
 	}
 	extras, err := h.checkTokenMint(ctx, req)
 	if err != nil {
@@ -475,13 +475,13 @@ func (h *AuthServiceHandler) CreateBot(ctx context.Context, req *pb.CreateBotReq
 		return nil, Unauthenticated(err)
 	}
 	if req.GetEmail() == "" {
-		return nil, status.Error(codes.InvalidArgument, "email is required")
+		return nil, refusal(ctx, codes.InvalidArgument, "email is required", CodeBotEmailRequired, "email", MsgBotEmailRequired, nil)
 	}
 	if err := refuseReservedEmail(ctx, req.GetEmail()); err != nil {
 		return nil, err
 	}
 	if req.GetRoleId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "role_id is required — a bot with no role holds a token that does nothing")
+		return nil, refusal(ctx, codes.InvalidArgument, "role_id is required — a bot with no role holds a token that does nothing", CodeBotRoleRequired, "role_id", MsgBotRoleRequired, nil)
 	}
 
 	allowed, err := h.Query.ListApiRealmRoles(ctx, &pb.ListApiRealmRolesReq{})
@@ -489,7 +489,7 @@ func (h *AuthServiceHandler) CreateBot(ctx context.Context, req *pb.CreateBotReq
 		return nil, err
 	}
 	if !containsRole(allowed.GetRoles(), req.GetRoleId()) {
-		return nil, status.Error(codes.InvalidArgument, errRoleNotForBots.Error())
+		return nil, refusal(ctx, codes.InvalidArgument, errRoleNotForBots.Error(), CodeRoleNotForBots, "role_id", MsgRoleNotForBots, nil)
 	}
 	// Not above the operator. A bot is the sharpest place for this rule: its
 	// token acts with the role's permissions, so a role above the operator's
@@ -512,8 +512,9 @@ func (h *AuthServiceHandler) CreateBot(ctx context.Context, req *pb.CreateBotReq
 	if orgs != nil {
 		var orgErr error
 		if orgID, orgErr = orgs.active(ctx); orgErr != nil {
-			return nil, status.Error(codes.FailedPrecondition,
-				"select an organization before creating a machine account — its role is granted inside one")
+			return nil, refusal(ctx, codes.FailedPrecondition,
+				"select an organization before creating a machine account — its role is granted inside one",
+				CodeOrganizationRequired, "", MsgSelectOrgForBots, nil)
 		}
 	}
 
@@ -676,7 +677,7 @@ func (h *AuthServiceHandler) operableBot(ctx context.Context, target string) (*p
 			// One message for "not a bot", "not here", and "does not exist":
 			// the caller must not learn which, or the refusal becomes a
 			// directory of other companies' accounts.
-			return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
+			return nil, refusal(ctx, codes.PermissionDenied, errNotABotAccount.Error(), CodeNotABot, "", MsgNotABot, nil)
 		}
 	}
 
@@ -686,7 +687,7 @@ func (h *AuthServiceHandler) operableBot(ctx context.Context, target string) (*p
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			// Does not exist reads like "not a bot" — see above.
-			return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
+			return nil, refusal(ctx, codes.PermissionDenied, errNotABotAccount.Error(), CodeNotABot, "", MsgNotABot, nil)
 		}
 		return nil, err
 	}
@@ -694,7 +695,7 @@ func (h *AuthServiceHandler) operableBot(ctx context.Context, target string) (*p
 		// The message names the RULE, not the account: a caller must not
 		// learn from the refusal whether the id belongs to a person, a bot it
 		// may not touch, or nothing at all.
-		return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
+		return nil, refusal(ctx, codes.PermissionDenied, errNotABotAccount.Error(), CodeNotABot, "", MsgNotABot, nil)
 	}
 	// Not above the minting operator. A token acts with the bot's roles, so
 	// minting for a bot whose role the operator could not have GRANTED is

@@ -4,6 +4,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
@@ -52,9 +53,9 @@ var (
 // checkFields refuses an envelope the pages could not render safely: a link
 // that is not absolute https (or http on localhost), a colour that is not
 // #rrggbb, a host that is not a lower-case DNS name.
-func checkFields(f *pb.EnvelopeFields) error {
+func checkFields(ctx context.Context, f *pb.EnvelopeFields) error {
 	if strings.TrimSpace(f.GetDisplayName()) == "" {
-		return invalid("display_name", "an envelope names the organization")
+		return invalid(ctx, "display_name", "an envelope names the organization", MsgEnvelopeNameRequired)
 	}
 	for field, v := range map[string]string{
 		"logo_light_url": f.GetLogoLightUrl(), "logo_dark_url": f.GetLogoDarkUrl(),
@@ -62,14 +63,14 @@ func checkFields(f *pb.EnvelopeFields) error {
 		"privacy_url": f.GetPrivacyUrl(), "terms_url": f.GetTermsUrl(),
 	} {
 		if v != "" && !safeURL(v) {
-			return invalid(field, "a link is an absolute https:// URL (http:// only for localhost)")
+			return invalid(ctx, field, "a link is an absolute https:// URL (http:// only for localhost)", MsgEnvelopeLinkInvalid)
 		}
 	}
 	if c := f.GetAccentColor(); c != "" && !accentRE.MatchString(c) {
-		return invalid("accent_color", "a colour is #rrggbb")
+		return invalid(ctx, "accent_color", "a colour is #rrggbb", MsgEnvelopeColorInvalid)
 	}
 	if h := f.GetVerifiedHost(); h != "" && !hostRE.MatchString(h) {
-		return invalid("verified_host", "a host is a lower-case DNS name")
+		return invalid(ctx, "verified_host", "a host is a lower-case DNS name", MsgEnvelopeHostInvalid)
 	}
 	return nil
 }
@@ -101,8 +102,11 @@ func beforeAnyWrite(err error) error {
 	return err
 }
 
-func invalid(field, why string) error {
-	return status.Errorf(codes.InvalidArgument, "grant: %s: %s", field, why)
+// invalid refuses one field of a proposed envelope: the operator's copy names
+// the field and the rule, the person gets msgid.
+func invalid(ctx context.Context, field, why, msgid string) error {
+	return grpcerr.ForUser(ctx, codes.InvalidArgument, "GrantService.ProposeEnvelope",
+		fmt.Sprintf("grant: %s: %s", field, why), CodeEnvelopeFieldInvalid, msgid)
 }
 
 // ProposeEnvelope writes a new proposed version for the organization the
@@ -117,7 +121,7 @@ func (h *GrantServiceHandler) ProposeEnvelope(ctx context.Context, req *pb.Propo
 	if f == nil {
 		f = &pb.EnvelopeFields{}
 	}
-	if err := checkFields(f); err != nil {
+	if err := checkFields(ctx, f); err != nil {
 		return nil, err
 	}
 	// One proposal per organization waits at a time. Without it a member
@@ -125,7 +129,9 @@ func (h *GrantServiceHandler) ProposeEnvelope(ctx context.Context, req *pb.Propo
 	// is deleted), without bound. Read, then written: two proposals racing
 	// for one organization can both land (SPEC.md, Gaps).
 	if _, err := h.Query.GetPendingEnvelope(ctx, &pb.GetPendingEnvelopeReq{OrgId: orgID}); err == nil {
-		return nil, status.Error(codes.FailedPrecondition, "grant: a proposal of this organization is already waiting for a decision; propose again once it is decided")
+		return nil, grpcerr.ForUser(ctx, codes.FailedPrecondition, "GrantService.ProposeEnvelope",
+			"grant: a proposal of this organization is already waiting for a decision; propose again once it is decided",
+			CodeProposalPending, MsgProposalPending)
 	} else if status.Code(err) != codes.NotFound {
 		return nil, beforeAnyWrite(err)
 	}
@@ -179,7 +185,9 @@ func (h *GrantServiceHandler) ApproveEnvelope(ctx context.Context, req *pb.Appro
 	resp, err := h.Mutation.ApproveEnvelopeRow(ctx, &pb.ApproveEnvelopeRowReq{Id: req.GetId(), DecidedBy: caller})
 	if isUniqueConflict(err) {
 		// Another version of the organization was approved at the same moment.
-		return nil, status.Error(codes.Aborted, "grant: another version of this organization's envelope was approved at the same time — reload and decide again")
+		return nil, grpcerr.ForUser(ctx, codes.Aborted, "GrantService.ApproveEnvelope",
+			"grant: another version of this organization's envelope was approved at the same time — reload and decide again",
+			CodeApprovedConcurrently, MsgApprovedConcurrently)
 	}
 	if err != nil {
 		return nil, err

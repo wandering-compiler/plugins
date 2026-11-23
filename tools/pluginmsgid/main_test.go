@@ -208,7 +208,11 @@ func f(ctx context.Context, dynamic string) {
 	_ = i18n.T(ctx, "Translated literal.", nil)
 	_ = refusal{userMsg: "Field literal."}
 	_ = refusal{userMsg: MsgOK}
+	_ = refuse(ctx, "C", MsgOK)
+	_ = refuse(ctx, "C", "Helper literal.")
 }
+
+func refuse(ctx context.Context, code, msgid string) error { return nil }
 
 type refusal struct{ userMsg string }
 `
@@ -219,10 +223,10 @@ type refusal struct{ userMsg string }
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 4 {
-		t.Fatalf("got %d findings, want 4:\n%s", len(got), strings.Join(got, "\n"))
+	if len(got) != 5 {
+		t.Fatalf("got %d findings, want 5:\n%s", len(got), strings.Join(got, "\n"))
 	}
-	for _, want := range []string{`"Literal sentence."`, "msgBare", `"Translated literal."`, `"Field literal."`} {
+	for _, want := range []string{`"Literal sentence."`, "msgBare", `"Translated literal."`, `"Field literal."`, `"Helper literal."`} {
 		if !strings.Contains(strings.Join(got, "\n"), want) {
 			t.Errorf("missing %s in:\n%s", want, strings.Join(got, "\n"))
 		}

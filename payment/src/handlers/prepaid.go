@@ -13,6 +13,7 @@ import (
 	"github.com/wandering-compiler/plugins/payment/lib/backend/stripe"
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 )
 
 // init wires the payment-succeeded webhook hook to the top-up grant.
@@ -172,7 +173,7 @@ func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID string, 
 			return h.currentBalance(ctx, userID)
 		}
 		if isOverdraw(err) {
-			return nil, status.Error(codes.FailedPrecondition, "insufficient credit balance")
+			return nil, grpcerr.ForUser(ctx, codes.FailedPrecondition, methodPrefix, "insufficient credit balance", codeInsufficientCredit, MsgInsufficientCredit)
 		}
 		if constraintCode(err) == codeValueOutOfRange {
 			// balance + delta past the BIGINT column: the database refused
@@ -269,12 +270,13 @@ func (h *PaymentServiceHandler) TopUpCredit(ctx context.Context, req *pb.TopUpCr
 	if !isPositiveAmount(amount) {
 		return nil, invalidArg("amount must be positive (ten-thousandths of the major unit: 19.99 is 199900)")
 	}
-	currency, err := h.chargeCurrency(req.GetCurrency())
+	currency, err := h.chargeCurrency(ctx, req.GetCurrency())
 	if err != nil {
 		return nil, err
 	}
 	if h.DefaultCurrency != "" && currency != h.DefaultCurrency {
-		return nil, invalidArg("a credit top-up is charged in the default currency only")
+		return nil, grpcerr.ForUserWith(ctx, codes.InvalidArgument, methodPrefix, "a credit top-up is charged in the default currency only",
+			codeTopUpCurrency, MsgTopUpCurrency, map[string]string{"currency": strings.ToUpper(h.DefaultCurrency)})
 	}
 	if err := idempotencyKeyTooLong(req.GetIdempotencyKey()); err != nil {
 		return nil, err

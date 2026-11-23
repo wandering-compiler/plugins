@@ -5,10 +5,10 @@ import (
 	"strings"
 
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 )
 
 // ReportUsage records metered consumption: append a UsageRecord and
@@ -73,7 +73,7 @@ func (h *PaymentServiceHandler) ReportUsage(ctx context.Context, req *pb.ReportU
 			// (usage gap 2). Nothing was recorded (the record and the
 			// meter are one transaction); say what, not "a value does not
 			// fit the column".
-			return nil, status.Error(codes.FailedPrecondition, "the meter's total would exceed its maximum; nothing was recorded")
+			return nil, grpcerr.ForUser(ctx, codes.FailedPrecondition, methodPrefix, "the meter's total would exceed its maximum; nothing was recorded", codeUsageLimitReached, MsgUsageLimitReached)
 		}
 		return nil, err
 	}
@@ -141,7 +141,7 @@ func (h *PaymentServiceHandler) GetMyUsageMeter(ctx context.Context, req *pb.Get
 	// none of the accepted ones has no meter to read.
 	period, err := canonicalPeriod(req.GetPeriod())
 	if err != nil {
-		return nil, invalidArg(err.Error())
+		return nil, grpcerr.ForUser(ctx, codes.InvalidArgument, methodPrefix, err.Error(), codePeriodInvalid, MsgPeriodInvalid)
 	}
 	got, err := h.Query.GetUsageMeter(ctx, &pb.GetUsageMeterReq{UserId: caller, Meter: req.GetMeter(), Period: period})
 	if absent(err) {
