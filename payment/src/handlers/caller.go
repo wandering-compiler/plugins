@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protowire"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
+
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
@@ -114,7 +116,7 @@ func actingFor(ctx context.Context, requested string) (string, error) {
 		return requested, nil
 	}
 	if requested != "" && requested != caller {
-		return "", status.Error(codes.PermissionDenied, "payment: a signed-in caller may act only on their own billing")
+		return "", grpcerr.ForUser(ctx, codes.PermissionDenied, methodPrefix, "a signed-in caller may act only on their own billing", codeBillingNotYours, MsgBillingNotYours)
 	}
 	return caller, nil
 }

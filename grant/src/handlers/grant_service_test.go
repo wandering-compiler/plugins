@@ -145,7 +145,7 @@ func TestRealmOnlyNeedsTheACL(t *testing.T) {
 
 func TestCheckFields(t *testing.T) {
 	ok := &pb.EnvelopeFields{DisplayName: "Acme", LogoLightUrl: "https://cdn.example.com/a.png", AccentColor: "#112233", VerifiedHost: "acme.example.com", WebsiteUrl: "http://localhost:3000"}
-	if err := checkFields(ok); err != nil {
+	if err := checkFields(context.Background(), ok); err != nil {
 		t.Errorf("a sound envelope refused: %v", err)
 	}
 	for name, f := range map[string]*pb.EnvelopeFields{
@@ -156,7 +156,7 @@ func TestCheckFields(t *testing.T) {
 		"colour":         {DisplayName: "A", AccentColor: "red"},
 		"host":           {DisplayName: "A", VerifiedHost: "Not A Host"},
 	} {
-		if err := checkFields(f); status.Code(err) != codes.InvalidArgument {
+		if err := checkFields(context.Background(), f); status.Code(err) != codes.InvalidArgument {
 			t.Errorf("%s: err = %v, want InvalidArgument", name, err)
 		}
 	}
@@ -363,4 +363,25 @@ func TestUnavailable_ReplaySafeOnlyBeforeAWrite(t *testing.T) {
 	if status.Code(err) != codes.Unavailable || grpcerr.IsReplaySafe(err) {
 		t.Errorf("a write: %v (replay-safe %v), want an Unavailable NOT marked replay-safe", err, grpcerr.IsReplaySafe(err))
 	}
+}
+
+// A refusal a person reads carries a stable code and a sentence from the
+// plugin's msgid set, not the operator's text.
+func TestRefusalsCarryAUserSentence(t *testing.T) {
+	err := checkFields(context.Background(), &pb.EnvelopeFields{DisplayName: "A", AccentColor: "red"})
+	d := userDetail(t, err)
+	if d.GetCode() != CodeEnvelopeFieldInvalid || d.GetMessage() != MsgEnvelopeColorInvalid {
+		t.Errorf("detail = %+v", d)
+	}
+}
+
+func userDetail(t *testing.T, err error) *w17pb.ErrorDetail {
+	t.Helper()
+	for _, d := range status.Convert(err).Details() {
+		if ed, ok := d.(*w17pb.ErrorDetail); ok {
+			return ed
+		}
+	}
+	t.Fatalf("no ErrorDetail on %v", err)
+	return nil
 }

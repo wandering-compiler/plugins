@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 
+	"google.golang.org/grpc/codes"
+
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
@@ -62,7 +64,7 @@ func enrollBotInOrg(txCtx context.Context, h *AuthServiceHandler, userID, roleID
 func orgMemberAccounts(ctx context.Context, h *AuthServiceHandler) ([]*pb.User, error) {
 	orgID, err := activeOrgID(ctx)
 	if err != nil {
-		return nil, errSelectOrgForBots
+		return nil, refuseAs(ctx, codes.FailedPrecondition, errSelectOrgForBots, CodeOrganizationRequired, "", MsgSelectOrgForBots, nil)
 	}
 	resp, err := h.Query.ListOrgMemberAccounts(ctx, &pb.ListOrgMemberAccountsReq{OrgId: orgID})
 	if err != nil {
@@ -75,7 +77,7 @@ func orgMemberAccounts(ctx context.Context, h *AuthServiceHandler) ([]*pb.User, 
 func isOrgMember(ctx context.Context, h *AuthServiceHandler, userID string) (bool, error) {
 	orgID, err := activeOrgID(ctx)
 	if err != nil {
-		return false, errSelectOrgForToken
+		return false, refuseAs(ctx, codes.FailedPrecondition, errSelectOrgForToken, CodeOrganizationRequired, "", MsgSelectOrgForToken, nil)
 	}
 	resp, err := h.Query.GetOrgMember(ctx, &pb.GetOrgMemberReq{UserId: userID, OrgId: orgID})
 	if err != nil {

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -104,11 +105,11 @@ func (h *AuthServiceHandler) refuseBackofficeInvitesInsideOrg(ctx context.Contex
 // backofficeOrgBySlug is the live organization named by slug.
 func (h *AuthServiceHandler) backofficeOrgBySlug(ctx context.Context, method, slug string) (string, error) {
 	if slug == "" {
-		return "", status.Errorf(codes.InvalidArgument, "%s: name the organization (org, its slug)", method)
+		return "", refusal(ctx, codes.InvalidArgument, method+": name the organization (org, its slug)", CodeOrganizationRequired, "org", MsgBackofficeNameOrg, nil)
 	}
 	o, err := h.Query.GetOrganizationBySlug(ctx, &pb.GetOrganizationBySlugReq{Slug: slug})
 	if status.Code(err) == codes.NotFound {
-		return "", status.Errorf(codes.NotFound, "%s: no organization %q", method, slug)
+		return "", refusal(ctx, codes.NotFound, fmt.Sprintf("%s: no organization %q", method, slug), CodeOrganizationUnknown, "org", MsgOrganizationUnknown, map[string]string{"org": slug})
 	}
 	if err != nil {
 		return "", err

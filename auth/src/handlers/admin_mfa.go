@@ -28,7 +28,7 @@ func (h *AuthServiceHandler) ResetAuthenticators(ctx context.Context, req *pb.Re
 		return nil, Unauthenticated(err)
 	}
 	if len(req.GetIds()) == 0 {
-		return nil, errEmptySelection
+		return nil, emptySelection(ctx)
 	}
 	for _, id := range req.GetIds() {
 		row, err := h.Query.GetAuthenticator(ctx, &pb.GetAuthenticatorReq{Id: id})

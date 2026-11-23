@@ -92,6 +92,12 @@ func normalizeSignUpCode(code string) string {
 var errSignUpConfirmInvalid = status.Error(codes.InvalidArgument,
 	"the confirmation code is wrong or has expired — register again to get a new one")
 
+// signUpConfirmInvalid is errSignUpConfirmInvalid with the person's sentence,
+// one for every cause.
+func signUpConfirmInvalid(ctx context.Context) error {
+	return refuseAs(ctx, codes.InvalidArgument, errSignUpConfirmInvalid, CodeSignUpConfirmInvalid, "code", MsgSignUpConfirmInvalid, nil)
+}
+
 // The address already has an account: emailTaken (errors.go). Said by
 // ConfirmSignUp only — to whoever holds the code mailed to that address, i.e.
 // its owner — never by SignUp under this feature, whose answer must not tell a
@@ -274,17 +280,17 @@ func (h *AuthServiceHandler) ConfirmSignUp(ctx context.Context, req *pb.ConfirmS
 		if operationalCode(err) != codes.OK {
 			return nil, Unauthenticated(err)
 		}
-		return nil, errSignUpConfirmInvalid
+		return nil, signUpConfirmInvalid(ctx)
 	}
 	attempt.named(att.GetEmail())
 	if att.GetAttempts() > maxSignUpConfirmAttempts {
 		attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_TOO_MANY_ATTEMPTS
 	}
 	if att.GetAttempts() == 0 || att.GetAttempts() > maxSignUpConfirmAttempts {
-		return nil, errSignUpConfirmInvalid
+		return nil, signUpConfirmInvalid(ctx)
 	}
 	if ok, _, _ := h.PasswordHash.VerifyAndRotate(att.GetCodeHash(), normalizeSignUpCode(req.GetCode()), nil); !ok {
-		return nil, errSignUpConfirmInvalid
+		return nil, signUpConfirmInvalid(ctx)
 	}
 	if err := signUpAllowlistGate(h, att.GetEmail()); err != nil {
 		return nil, err
@@ -322,13 +328,13 @@ func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID, i
 	claimed, err := h.Mutation.ClaimPendingSignUp(txCtx, &pb.ClaimPendingSignUpReq{PendingId: pendingID})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			return nil, errSignUpConfirmInvalid
+			return nil, signUpConfirmInvalid(txCtx)
 		}
 		return nil, err
 	}
 	if claimed.GetEmail() == "" {
 		// Claimed by a concurrent confirmation between the check and here.
-		return nil, errSignUpConfirmInvalid
+		return nil, signUpConfirmInvalid(txCtx)
 	}
 	// SignUp refuses the address already; a registration parked before it did
 	// is refused here, and the transaction leaves it unclaimed.

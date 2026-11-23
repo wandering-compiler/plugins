@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protowire"
 
+	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
+
 	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 )
 
@@ -62,4 +64,20 @@ func TestDecideWorkers_RefusesWithoutACaller(t *testing.T) {
 	if len(w.decisions) != 0 {
 		t.Fatalf("a refused call decided %v", w.decisions)
 	}
+}
+
+// The backoffice's refusals carry a stable code and a sentence from the
+// plugin's msgid set, not the operator's text.
+func TestDecideWorkers_RefusalForAPerson(t *testing.T) {
+	h := &ClusterServiceHandler{}
+	_, err := h.decide(context.Background(), &pb.DecideWorkersActionReq{}, true)
+	for _, d := range status.Convert(err).Details() {
+		if ed, ok := d.(*w17pb.ErrorDetail); ok {
+			if ed.GetCode() != CodeSelectWorker || ed.GetMessage() != MsgSelectWorker {
+				t.Errorf("detail = %+v", ed)
+			}
+			return
+		}
+	}
+	t.Fatalf("no ErrorDetail on %v", err)
 }

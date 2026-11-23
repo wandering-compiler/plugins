@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -115,7 +116,7 @@ func TestDisableAndEnableAccounts_EmitPerAccountChanged(t *testing.T) {
 	if s.users["u3"].disabledAt == nil {
 		t.Error("an erased account was enabled")
 	}
-	if _, err := h.EnableAccounts(ctx, &pb.EnableAccountsReq{}); err != errEmptySelection {
+	if _, err := h.EnableAccounts(ctx, &pb.EnableAccountsReq{}); !errors.Is(err, errEmptySelection) {
 		t.Errorf("an empty selection: %v", err)
 	}
 }

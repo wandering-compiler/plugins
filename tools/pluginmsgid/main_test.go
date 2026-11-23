@@ -3,6 +3,8 @@ package main
 import (
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -174,4 +176,59 @@ func contains(h []string, n string) bool {
 		}
 	}
 	return false
+}
+
+// A sentence handed to a user-facing call must be a marked constant: a
+// literal and an unmarked constant of the package are reported; a marked
+// constant, a variable and another package's constant are not.
+func TestUnmarkedSentences(t *testing.T) {
+	dir := t.TempDir()
+	src := `package h
+
+import (
+	"context"
+
+	"google.golang.org/grpc/codes"
+
+	"example.com/grpcerr"
+	"example.com/i18n"
+)
+
+//w17:msgid
+const MsgOK = "Marked."
+
+const msgBare = "Not marked."
+
+func f(ctx context.Context, dynamic string) {
+	_ = grpcerr.ForUser(ctx, codes.NotFound, "M", "dev", "C", MsgOK)
+	_ = grpcerr.ForUser(ctx, codes.NotFound, "M", "dev", "C", "Literal sentence.")
+	_ = grpcerr.ForUserWith(ctx, codes.NotFound, "M", "dev", "C", msgBare, nil)
+	_ = grpcerr.ForUser(ctx, codes.NotFound, "M", "dev", "C", dynamic)
+	_ = grpcerr.ForUser(ctx, codes.NotFound, "M", "dev", "C", grpcerr.MsgidSomething)
+	_ = i18n.T(ctx, "Translated literal.", nil)
+	_ = refusal{userMsg: "Field literal."}
+	_ = refusal{userMsg: MsgOK}
+	_ = refuse(ctx, "C", MsgOK)
+	_ = refuse(ctx, "C", "Helper literal.")
+}
+
+func refuse(ctx context.Context, code, msgid string) error { return nil }
+
+type refusal struct{ userMsg string }
+`
+	if err := os.WriteFile(filepath.Join(dir, "h.go"), []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := unmarkedSentences(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("got %d findings, want 5:\n%s", len(got), strings.Join(got, "\n"))
+	}
+	for _, want := range []string{`"Literal sentence."`, "msgBare", `"Translated literal."`, `"Field literal."`, `"Helper literal."`} {
+		if !strings.Contains(strings.Join(got, "\n"), want) {
+			t.Errorf("missing %s in:\n%s", want, strings.Join(got, "\n"))
+		}
+	}
 }

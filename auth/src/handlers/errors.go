@@ -317,6 +317,23 @@ const (
 	CodeProductPlanNameTaken = "PRODUCT_PLAN_NAME_TAKEN"
 	CodeProductPlanInUse     = "PRODUCT_PLAN_IN_USE"
 
+	// The refusals a person reads in the invitation, registration,
+	// machine-account and admin flows. INVITE_INVALID and
+	// SIGNUP_CONFIRM_INVALID are one code each for every cause, as their
+	// sentinels are (anti-enumeration); NOT_A_MACHINE_ACCOUNT likewise for
+	// "a person", "not in your organization" and "no such account".
+	CodeInviteInvalid        = "INVITE_INVALID"
+	CodeSignUpConfirmInvalid = "SIGNUP_CONFIRM_INVALID"
+	CodeInviteRoleChanged    = "INVITE_ROLE_CHANGED"
+	CodeOrganizationRequired = "ORGANIZATION_REQUIRED" // the same code as grpcerr.CodeOrganizationRequired
+	CodeOrganizationUnknown  = "ORGANIZATION_UNKNOWN"
+	CodeBotDisabled          = "MACHINE_ACCOUNT_DISABLED"
+	CodeNotABot              = "NOT_A_MACHINE_ACCOUNT"
+	CodeBotEmailRequired     = "MACHINE_ACCOUNT_EMAIL_REQUIRED"
+	CodeBotRoleRequired      = "MACHINE_ACCOUNT_ROLE_REQUIRED"
+	CodeRoleNotForBots       = "ROLE_NOT_FOR_MACHINE_ACCOUNTS"
+	CodeEmptySelection       = "EMPTY_SELECTION"
+
 	// CodeSignUpNotInvited: under invite_only, a registration with no
 	// pending invitation for its address and no valid invitation link.
 	CodeSignUpNotInvited = "SIGNUP_NOT_INVITED"
@@ -559,7 +576,52 @@ const (
 	MsgProductPlanUnknown          = "There is no such plan."
 	MsgProductPlanNameTaken        = "A plan with this name already exists. Choose another name."
 	MsgProductPlanInUse            = "Organizations are on this plan. Move them to another plan first."
+
+	// One sentence for every cause of each, like the codes above.
+	MsgInviteInvalid        = "This invitation cannot be used: it has expired, was already accepted, or is meant for another account. Ask for a new invitation."
+	MsgSignUpConfirmInvalid = "The confirmation code is wrong or has expired. Register again to get a new code."
+	MsgInviteRoleChanged    = "The role in this invitation has changed since it was sent. Ask for a new invitation."
+
+	// The same words as the SDK's own sentence for ORGANIZATION_REQUIRED, so
+	// the two share one catalog entry.
+	MsgOrganizationRequired = "Choose the organization to act in: name it in the W17-Org header (the organization's slug) and try again."
+	MsgSelectOrgForBots     = "Choose an organization first: machine accounts belong to one."
+	MsgSelectOrgForToken    = "Choose an organization first: a machine account's token is issued inside one."
+	MsgBackofficeNameOrg    = "Name the organization."
+	MsgOrganizationUnknown  = "There is no organization {org}."
+
+	MsgBotDisabled      = "This machine account is disabled. Enable it before issuing a token."
+	MsgNotABot          = "Tokens can be issued only for the machine accounts of your organization."
+	MsgBotEmailRequired = "Enter an email address for the machine account."
+	MsgBotRoleRequired  = "Choose a role for the machine account. Without one, its token can do nothing."
+	MsgRoleNotForBots   = "This role is for people who sign in. A machine account cannot have it."
+
+	MsgEmptySelection = "Select the rows to act on. This action does not apply to every row at once."
 )
+
+// refuseAs is refusal for a SENTINEL some code compares against (errors.Is,
+// the sign-in outcome rules): the error keeps the sentinel's identity and its
+// operator message, and carries the person's sentence translated for this
+// request. A package-level sentinel cannot carry it itself — translating needs
+// the request's language.
+func refuseAs(ctx context.Context, c codes.Code, sentinel error, code, field, msgid string, params map[string]string) error {
+	dev := sentinel.Error()
+	if st, ok := status.FromError(sentinel); ok {
+		dev = st.Message()
+	}
+	return &sentinelRefusalError{sentinel: sentinel, st: status.Convert(refusal(ctx, c, dev, code, field, msgid, params))}
+}
+
+// sentinelRefusalError is refuseAs's error: the sentinel to errors.Is, the
+// translated status to the wire.
+type sentinelRefusalError struct {
+	sentinel error
+	st       *status.Status
+}
+
+func (e *sentinelRefusalError) Error() string              { return e.sentinel.Error() }
+func (e *sentinelRefusalError) Unwrap() error              { return e.sentinel }
+func (e *sentinelRefusalError) GRPCStatus() *status.Status { return e.st }
 
 // isUniqueConflict is a write refused by a unique index: storage reports it as
 // InvalidArgument with an ErrorDetail{code: UNIQUE_VIOLATION} (or, from a fake

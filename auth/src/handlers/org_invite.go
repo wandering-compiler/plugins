@@ -264,6 +264,12 @@ func requirePendingInvite(ctx context.Context, h *AuthServiceHandler, email, inv
 var errInviteInvalid = status.Error(codes.NotFound,
 	"invitation invalid, expired, already accepted, or addressed to another account")
 
+// inviteInvalid is errInviteInvalid with the person's sentence — the same one
+// for all four causes, for the reason above.
+func inviteInvalid(ctx context.Context) error {
+	return refuseAs(ctx, codes.NotFound, errInviteInvalid, CodeInviteInvalid, "", MsgInviteInvalid, nil)
+}
+
 func (h *AuthServiceHandler) orgInviteTTL() time.Duration {
 	if h.OrgInviteTTLHours > 0 {
 		return time.Duration(h.OrgInviteTTLHours) * time.Hour
@@ -754,7 +760,7 @@ func (h *AuthServiceHandler) AcceptOrgInvite(ctx context.Context, req *pb.Accept
 		TokenHash: tokenHash,
 	})
 	if status.Code(err) == codes.NotFound {
-		return nil, errInviteInvalid
+		return nil, inviteInvalid(ctx)
 	}
 	if err != nil {
 		return nil, err
@@ -766,7 +772,7 @@ func (h *AuthServiceHandler) AcceptOrgInvite(ctx context.Context, req *pb.Accept
 	// claim is now keyed on the token, and the same opaque refusal covers it — a
 	// guesser must not learn that the token was good but the account was wrong.
 	if bound && invitedEmail != email {
-		return nil, errInviteInvalid
+		return nil, inviteInvalid(ctx)
 	}
 	if err := inviteVerifiedEmailGate(ctx, h, userID, pending.GetOrgId(), bound); err != nil {
 		return nil, err
@@ -817,7 +823,7 @@ func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, userID string
 	// naming an internal RPC. The anti-probe wording was written, tested by
 	// eye, and never sent.
 	if status.Code(err) == codes.NotFound {
-		return nil, errInviteInvalid
+		return nil, inviteInvalid(txCtx)
 	}
 	if err != nil {
 		return nil, err
@@ -829,7 +835,7 @@ func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, userID string
 	// Both answer with the same refusal, which is the property that matters.
 	orgID := claimed.GetOrgId()
 	if orgID == "" {
-		return nil, errInviteInvalid
+		return nil, inviteInvalid(txCtx)
 	}
 	roleName := claimed.GetRole()
 

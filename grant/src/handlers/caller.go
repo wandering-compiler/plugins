@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protowire"
 
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
@@ -116,7 +117,7 @@ func inOrg(ctx context.Context) (caller, orgID string, err error) {
 		return "", "", err
 	}
 	if orgID = activeOrg(ctx); orgID == "" {
-		return "", "", status.Error(codes.FailedPrecondition, "grant: this acts in an organization — name one (W17-Org)")
+		return "", "", grpcerr.OrganizationRequired(ctx, "GrantService", "grant: this acts in an organization — name one (W17-Org)")
 	}
 	return caller, orgID, nil
 }
@@ -139,7 +140,8 @@ func (h *GrantServiceHandler) realmOnly(ctx context.Context, method string) (str
 		return "", err
 	}
 	if activeOrg(ctx) != "" && !h.heldRealmWide(ctx, method) {
-		return "", status.Error(codes.PermissionDenied, "grant: the platform decides this, realm-wide, not from inside an organization")
+		return "", grpcerr.ForUser(ctx, codes.PermissionDenied, "GrantService."+method,
+			"grant: the platform decides this, realm-wide, not from inside an organization", CodeBackofficeOnly, MsgBackofficeOnly)
 	}
 	if !lockGatesCall(ctx, h.Lock, pb.GrantService_ServiceDesc.ServiceName, method) {
 		return "", status.Error(codes.PermissionDenied, "grant: the backoffice's methods need the endpoint ACL — "+method+" is not in the lock")
