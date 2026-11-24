@@ -40,7 +40,7 @@ func (h *AuthServiceHandler) AcceptMyOrgInvite(ctx context.Context, req *pb.Acce
 	// an open one or an unknown id are the same opaque refusal.
 	found, err := h.Query.GetPendingOrgInviteForEmail(ctx, &pb.GetPendingOrgInviteForEmailReq{InviteId: req.GetInviteId(), Email: email})
 	if status.Code(err) == codes.NotFound {
-		return nil, errInviteInvalid
+		return nil, inviteInvalid(ctx)
 	}
 	if err != nil {
 		return nil, err

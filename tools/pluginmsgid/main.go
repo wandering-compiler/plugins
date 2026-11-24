@@ -110,12 +110,25 @@ func run(dir string, write bool) error {
 		return os.WriteFile(yamlPath, []byte(updated), 0o644)
 	}
 
+	unmarked, err := unmarkedSentences(filepath.Join(dir, "src"))
+	if err != nil {
+		return err
+	}
 	missing := difference(declared, mirrored)
 	stale := difference(mirrored, declared)
-	if len(missing) == 0 && len(stale) == 0 {
+	if len(missing) == 0 && len(stale) == 0 && len(unmarked) == 0 {
 		return nil
 	}
 	var b strings.Builder
+	if len(unmarked) > 0 {
+		fmt.Fprintf(&b, "a sentence for a person is not marked — it reaches no catalog\n")
+		for _, u := range unmarked {
+			fmt.Fprintf(&b, "  %s\n", u)
+		}
+		if len(missing) == 0 && len(stale) == 0 {
+			return fmt.Errorf("%s", strings.TrimSuffix(b.String(), "\n"))
+		}
+	}
 	fmt.Fprintf(&b, "plugin.yaml msgids: has drifted from the plugin's Go\n")
 	for _, m := range missing {
 		fmt.Fprintf(&b, "  + %s\n      in the Go, declared nowhere — no translator will ever see it\n", strconv.Quote(m))

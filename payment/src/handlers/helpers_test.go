@@ -13,6 +13,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
+
 	"github.com/wandering-compiler/plugins/payment/lib/backend"
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
@@ -128,7 +130,7 @@ func TestProviderFailure_MapsByClass(t *testing.T) {
 		{errors.New("dial tcp: connection refused"), codes.Unavailable},
 		{context.DeadlineExceeded, codes.Unavailable},
 	} {
-		err := providerFailure(c.cause)
+		err := providerFailure(context.Background(), c.cause)
 		if status.Code(err) != c.want {
 			t.Errorf("providerFailure(%v) = %v, want %v", c.cause, status.Code(err), c.want)
 		}
@@ -141,7 +143,7 @@ func TestProviderFailure_MapsByClass(t *testing.T) {
 	// The caller's own input is the exception: its message names only that
 	// input, and the caller needs it to correct the request.
 	in := &backend.InputError{Msg: `amount "1.5" has more fractional digits than jpy allows (scale 0)`}
-	err := providerFailure(fmt.Errorf("charge: %w", in))
+	err := providerFailure(context.Background(), fmt.Errorf("charge: %w", in))
 	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != in.Msg {
 		t.Errorf("input error = %v, want InvalidArgument with %q", err, in.Msg)
 	}
@@ -346,7 +348,7 @@ func TestProviderFailure_DoesNotEchoTheProvider(t *testing.T) {
 		fmt.Errorf("stripe: /v1/refunds: No such charge (invalid_request_error): %w", backend.ErrInvalidRequest),
 		fmt.Errorf("stripe: /v1/payment_intents: Your card was declined (card_error): %w", backend.ErrDeclined),
 	} {
-		msg := status.Convert(providerFailure(cause)).Message()
+		msg := status.Convert(providerFailure(context.Background(), cause)).Message()
 		for _, leak := range []string{"sk_", "/v1/", "stripe", "API Key"} {
 			if strings.Contains(msg, leak) {
 				t.Errorf("caller-facing message %q leaks %q", msg, leak)
@@ -360,20 +362,76 @@ func TestProviderFailure_DoesNotEchoTheProvider(t *testing.T) {
 // "try again later".
 func TestProviderFailure_PassesTheReasonCode(t *testing.T) {
 	cause := &backend.CodedError{Code: "insufficient_funds", Err: fmt.Errorf("stripe: /v1/payment_intents: Your card has insufficient funds. (card_error): %w", backend.ErrDeclined)}
-	err := providerFailure(fmt.Errorf("charge: %w", cause))
+	err := providerFailure(context.Background(), fmt.Errorf("charge: %w", cause))
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Errorf("code = %v, want FailedPrecondition", status.Code(err))
 	}
 	if got := constraintCode(err); got != "INSUFFICIENT_FUNDS" {
 		t.Errorf("detail code = %q, want INSUFFICIENT_FUNDS", got)
 	}
-	if msg := status.Convert(err).Message(); msg != "the payment was declined" {
+	if msg := status.Convert(err).Message(); msg != "PaymentService: the payment was declined" {
 		t.Errorf("message = %q", msg)
 	}
-	if got := constraintCode(providerFailure(fmt.Errorf("x: %w", backend.ErrDeclined))); got != "" {
-		t.Errorf("no code named, detail %q attached", got)
+	// The person reads the translatable sentence, not the operator's copy.
+	if got := detailMessage(err); got != MsgPaymentDeclined {
+		t.Errorf("detail message = %q, want %q", got, MsgPaymentDeclined)
 	}
-	if got := status.Code(providerFailure(fmt.Errorf("stripe: /v1/refunds: %w", context.Canceled))); got != codes.Canceled {
+	// No provider code: the class's own.
+	if got := constraintCode(providerFailure(context.Background(), fmt.Errorf("x: %w", backend.ErrDeclined))); got != codePaymentDeclined {
+		t.Errorf("no code named, detail %q, want %s", got, codePaymentDeclined)
+	}
+	if got := status.Code(providerFailure(context.Background(), fmt.Errorf("stripe: /v1/refunds: %w", context.Canceled))); got != codes.Canceled {
 		t.Errorf("cancelled call = %v, want Canceled", got)
+	}
+}
+
+// detailMessage is the w17.ErrorDetail message of err, "" when it has none.
+func detailMessage(err error) string {
+	for _, d := range status.Convert(err).Details() {
+		if ed, ok := d.(*w17pb.ErrorDetail); ok {
+			return ed.GetMessage()
+		}
+	}
+	return ""
+}
+
+// A refusal a person can act on carries a stable code and a translatable
+// sentence; the operator's copy stays in the status message.
+func TestRefusalsForAPerson(t *testing.T) {
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}, DistTx: &fakeDistTx{}, DefaultCurrency: "usd"}
+	ctx := context.Background()
+	for _, c := range []struct {
+		name     string
+		err      error
+		code     string
+		msg      string
+		operator string
+	}{
+		{"no amount", func() error { _, err := h.CreatePayment(ctx, &pb.ChargeReq{UserId: "u1"}); return err }(),
+			codeAmountRequired, MsgAmountRequired, "amount is required"},
+		{"negative amount", func() error { _, err := h.CreatePayment(ctx, &pb.ChargeReq{UserId: "u1", Amount: -5}); return err }(),
+			codeAmountNotPositive, MsgAmountNotPositive, "amount must be positive"},
+		{"bad currency", func() error {
+			_, err := h.CreatePayment(ctx, &pb.ChargeReq{UserId: "u1", Amount: 5, Currency: "euro"})
+			return err
+		}(), codeCurrencyInvalid, MsgCurrencyInvalid, "ISO-4217"},
+		{"long description", func() error {
+			_, err := h.CreatePayment(ctx, &pb.ChargeReq{UserId: "u1", Amount: 5, Description: strings.Repeat("x", maxDescription+1)})
+			return err
+		}(), codeDescriptionTooLong, "The description can be at most 500 characters long.", "description is longer"},
+		{"bad e-mail", func() error {
+			_, err := h.CreateCustomer(ctx, &pb.NewCustomerReq{UserId: "u1", Email: "not-an-address"})
+			return err
+		}(), codeEmailInvalid, MsgEmailInvalid, "not an address"},
+	} {
+		if got := constraintCode(c.err); got != c.code {
+			t.Errorf("%s: code = %q, want %q (err %v)", c.name, got, c.code, c.err)
+		}
+		if got := detailMessage(c.err); got != c.msg {
+			t.Errorf("%s: sentence = %q, want %q", c.name, got, c.msg)
+		}
+		if op := status.Convert(c.err).Message(); !strings.Contains(op, c.operator) {
+			t.Errorf("%s: operator copy = %q, want it to keep %q", c.name, op, c.operator)
+		}
 	}
 }

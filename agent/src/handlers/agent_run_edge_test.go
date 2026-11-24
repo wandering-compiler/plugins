@@ -129,8 +129,6 @@ func TestRunAgent_FailuresAreCodedAndStillBilled(t *testing.T) {
 	}{
 		{"out of turns", [][]map[string]any{{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)}},
 			&pb.Limits{MaxTurns: 2}, codes.DeadlineExceeded, []CallOutcome{OutcomeOK, OutcomeOK}},
-		{"over the tool budget", [][]map[string]any{{spendTurn([][3]string{{"a", "search", `{}`}, {"b", "search", `{}`}}, 10, 1)}},
-			&pb.Limits{MaxToolCalls: 1}, codes.ResourceExhausted, []CallOutcome{OutcomeOK}},
 		{"runaway output on turn two", [][]map[string]any{{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)}, runaway},
 			nil, codes.ResourceExhausted, []CallOutcome{OutcomeOK, OutcomeFailed}},
 		{"the provider failing on turn two", [][]map[string]any{{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)}, {delta("half")}},

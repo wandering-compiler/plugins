@@ -123,6 +123,8 @@ message CompleteEvent {
     TextDelta delta = 1;
     // The call ended. Read `status` before treating the text as an answer.
     Finished finished = 2;
+    // The call is tried again on a fallback model: drop the deltas so far.
+    Restart restart = 3;
   }
 }
 
@@ -384,5 +386,8 @@ message RunAgentEvent {
     ToolCall  tool_call = 2;
     Activity  activity  = 3;
     Finished  finished  = 4;
+    // The current turn is tried again on a fallback model: drop the deltas
+    // since the turn began.
+    Restart   restart   = 5;
   }
 }

@@ -244,7 +244,7 @@ func (h *PaymentServiceHandler) reconcileRefunds(ctx context.Context, providerPa
 	}
 	refunds, err := h.Backend.ListRefunds(ctx, providerPaymentID)
 	if err != nil {
-		return providerFailure(err)
+		return providerFailure(ctx, err)
 	}
 	for _, r := range refunds {
 		got, err := h.Query.GetRefundByProviderId(ctx, &pb.GetRefundByProviderIdReq{ProviderRefundId: r.ProviderRefundID})
@@ -572,7 +572,7 @@ func (h *PaymentServiceHandler) holdAmountMismatch(ctx context.Context, ev strip
 	if received.Currency == "" {
 		obj, err := h.Backend.GetPayment(ctx, ev.PaymentIntentID)
 		if err != nil {
-			return false, providerFailure(err)
+			return false, providerFailure(ctx, err)
 		}
 		received = obj.Received
 	}

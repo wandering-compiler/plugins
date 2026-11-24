@@ -155,20 +155,31 @@ func TestMutatingToolsRunBeforeReadsAndNotInParallel(t *testing.T) {
 
 // The budget bounds the whole run, and it is reserved per ROUND: an over-budget
 // round must apply NO writes rather than as many as the allowance covered.
-func TestAnOverBudgetRoundAppliesNothing(t *testing.T) {
+// An over-budget round runs none of its calls, and the run does not fail
+// over it: the model hears that the budget is spent and answers once more
+// without tools. The answer is incomplete, and says why.
+func TestAnOverBudgetRoundAppliesNothingAndTheModelAnswersWithoutTools(t *testing.T) {
 	write := &testTool{name: "write", mutating: true}
-	_, err := runWith(t, [][]map[string]any{
+	s := &scriptedStreamer{turns: [][]map[string]any{
 		{multiToolCall(
 			[3]string{"c1", "write", `{}`},
 			[3]string{"c2", "write", `{}`},
 			[3]string{"c3", "write", `{}`},
 		)},
-	}, []Tool{write}, Limits{MaxToolCalls: 2}, nil)
-	if !errors.Is(err, ErrBudgetExhausted) {
-		t.Fatalf("err = %v, want ErrBudgetExhausted", err)
+		{delta("Part of it."), completed(StatusCompleted, "", 9)},
+	}}
+	out, err := Run(context.Background(), s, Model{ID: "gpt-4o", MaxTokens: 100}, "", []Message{{Text: "q"}}, []Tool{write}, Limits{MaxToolCalls: 2}, silent)
+	if err != nil {
+		t.Fatalf("Run: %v — a spent budget ended the run", err)
 	}
 	if len(write.calls) != 0 {
 		t.Errorf("the tool ran %d times on an over-budget round — partial mutation", len(write.calls))
+	}
+	if out.Text != "Part of it." || out.Status != StatusIncomplete || out.IncompleteReason != ReasonToolBudgetExhausted {
+		t.Errorf("out = %q %s/%s, want the final answer, incomplete for the budget", out.Text, out.Status, out.IncompleteReason)
+	}
+	if len(s.seen) != 2 || s.seen[1].toolCount != 0 {
+		t.Errorf("turns = %+v, want a second turn offered no tools", s.seen)
 	}
 }
 

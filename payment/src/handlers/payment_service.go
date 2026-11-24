@@ -8,10 +8,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/wandering-compiler/sdk/go/core/grpcerr"
 	"github.com/wandering-compiler/sdk/go/lib/typere"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -124,7 +126,7 @@ func (h *PaymentServiceHandler) createCustomer(ctx context.Context, userID, emai
 	// The address the row will hold is checked before the provider customer
 	// exists, not by the insert after it.
 	if email != "" && (utf8.RuneCountInString(email) > maxEmail || !typere.ValidEmail(email)) {
-		return nil, invalidArg("email is not an address the customer can be recorded with")
+		return nil, grpcerr.ForUser(ctx, codes.InvalidArgument, methodPrefix, "email is not an address the customer can be recorded with", codeEmailInvalid, MsgEmailInvalid)
 	}
 	install := h.installID()
 	providerID, err := h.Backend.EnsureCustomer(ctx, backend.CustomerSpec{
@@ -132,7 +134,7 @@ func (h *PaymentServiceHandler) createCustomer(ctx context.Context, userID, emai
 		IdempotencyKey: scopedKey("customer", install, userID, email),
 	})
 	if err != nil {
-		return nil, providerFailure(err)
+		return nil, providerFailure(ctx, err)
 	}
 	created, err := h.Mutation.CreateCustomer(ctx, &pb.CreateCustomerReq{
 		UserId:             userID,
@@ -166,15 +168,15 @@ func (h *PaymentServiceHandler) CreatePayment(ctx context.Context, req *pb.Charg
 	}
 	amount := req.GetAmount()
 	if amount == 0 {
-		return nil, invalidArg("amount is required")
+		return nil, grpcerr.ForUser(ctx, codes.InvalidArgument, methodPrefix, "amount is required", codeAmountRequired, MsgAmountRequired)
 	}
 	// Reject a non-positive amount before the provider call — a
 	// negative amount reaches Stripe as a credit/reversal (customer credited
 	// instead of charged), a zero is a meaningless charge.
 	if !isPositiveAmount(amount) {
-		return nil, invalidArg("amount must be positive (ten-thousandths of the major unit: 19.99 is 199900)")
+		return nil, grpcerr.ForUser(ctx, codes.InvalidArgument, methodPrefix, "amount must be positive (ten-thousandths of the major unit: 19.99 is 199900)", codeAmountNotPositive, MsgAmountNotPositive)
 	}
-	currency, err := h.chargeCurrency(req.GetCurrency())
+	currency, err := h.chargeCurrency(ctx, req.GetCurrency())
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +187,8 @@ func (h *PaymentServiceHandler) CreatePayment(ctx context.Context, req *pb.Charg
 	// the intent already existed and a retry under the key replayed it and
 	// failed the same way, for ever.
 	if utf8.RuneCountInString(req.GetDescription()) > maxDescription {
-		return nil, invalidArg(fmt.Sprintf("description is longer than %d characters", maxDescription))
+		return nil, grpcerr.ForUserWith(ctx, codes.InvalidArgument, methodPrefix, fmt.Sprintf("description is longer than %d characters", maxDescription),
+			codeDescriptionTooLong, MsgDescriptionTooLong, map[string]string{"max": strconv.Itoa(maxDescription)})
 	}
 
 	cust, err := h.resolveCustomer(ctx, req.GetUserId())
@@ -208,7 +211,7 @@ const (
 
 // chargeCurrency normalises a request currency, falling back to the
 // configured default, and refuses anything that is not a 3-letter code.
-func (h *PaymentServiceHandler) chargeCurrency(reqCurrency string) (string, error) {
+func (h *PaymentServiceHandler) chargeCurrency(ctx context.Context, reqCurrency string) (string, error) {
 	currency := strings.ToLower(strings.TrimSpace(reqCurrency))
 	if currency == "" {
 		currency = h.DefaultCurrency
@@ -217,7 +220,7 @@ func (h *PaymentServiceHandler) chargeCurrency(reqCurrency string) (string, erro
 		return "", invalidArg("currency is required (no default_currency configured)")
 	}
 	if !isCurrencyCode(currency) {
-		return "", invalidArg("currency must be a 3-letter ISO-4217 code")
+		return "", grpcerr.ForUser(ctx, codes.InvalidArgument, methodPrefix, "currency must be a 3-letter ISO-4217 code", codeCurrencyInvalid, MsgCurrencyInvalid)
 	}
 	return currency, nil
 }
@@ -260,7 +263,7 @@ func (h *PaymentServiceHandler) charge(ctx context.Context, cust *pb.Customer, a
 		Install:            h.installID(),
 	})
 	if err != nil {
-		return nil, "", providerFailure(err)
+		return nil, "", providerFailure(ctx, err)
 	}
 
 	created, err := h.Mutation.CreatePayment(ctx, &pb.CreatePaymentReq{
@@ -290,7 +293,7 @@ func (h *PaymentServiceHandler) charge(ctx context.Context, cust *pb.Customer, a
 		(p.GetIdempotencyKey() == idemKey || p.GetIdempotencyKey() == reconciledChargeKey(pr.ProviderPaymentID)) {
 		return p, pr.ClientSecret, nil
 	}
-	return nil, "", status.Error(codes.AlreadyExists, "idempotency_key already used for a different payment")
+	return nil, "", grpcerr.ForUser(ctx, codes.AlreadyExists, methodPrefix, "idempotency_key already used for a different payment", codeRequestReused, MsgRequestReused)
 }
 
 // recordedCharge answers a retried charge from the local row, before the
@@ -319,7 +322,7 @@ func (h *PaymentServiceHandler) recordedCharge(ctx context.Context, cust *pb.Cus
 		return nil, nil
 	}
 	if p.GetCustomerId() != cust.GetId() || p.GetAmount() != amount || !strings.EqualFold(p.GetCurrency(), currency) {
-		return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different payment")
+		return nil, grpcerr.ForUser(ctx, codes.AlreadyExists, methodPrefix, "idempotency_key already used for a different payment", codeRequestReused, MsgRequestReused)
 	}
 	switch p.GetStatus() {
 	case pb.Payment_SUCCEEDED, pb.Payment_FAILED, pb.Payment_CANCELED, pb.Payment_REFUNDED, pb.Payment_PROCESSING, pb.Payment_AMOUNT_MISMATCH:
@@ -501,7 +504,7 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	// refund's metadata recognises it, so ask before refunding again.
 	res, found, err := h.Backend.FindRefund(ctx, payment.GetProviderPaymentId(), req.GetIdempotencyKey())
 	if err != nil {
-		return nil, beforeAnyEffect(providerFailure(err))
+		return nil, beforeAnyEffect(providerFailure(ctx, err))
 	}
 	if found && rest {
 		local, err := h.Query.GetRefundByProviderId(ctx, &pb.GetRefundByProviderIdReq{ProviderRefundId: res.ProviderRefundID})
@@ -559,7 +562,7 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 						return false, status.Error(codes.Unavailable, "payment: the refund was refused and its credit could not be given back yet; retry")
 					}
 				}
-				return false, providerFailure(err)
+				return false, providerFailure(ctx, err)
 			}
 			resp, fresh, err = h.recordOwnRefund(ctx, txCtx, payment, res, amount, storedKey)
 			// Only a row this call inserted is the transaction's to commit;
@@ -724,7 +727,7 @@ func (h *PaymentServiceHandler) refundAllowed(ctx, txCtx context.Context, paymen
 	default:
 		obj, err := h.Backend.GetPayment(ctx, payment.GetProviderPaymentId())
 		if err != nil {
-			return 0, providerFailure(err)
+			return 0, providerFailure(ctx, err)
 		}
 		if obj.Status != "succeeded" {
 			return 0, status.Errorf(codes.FailedPrecondition, "payment %s has not succeeded at the provider (%s); it cannot be refunded yet", payment.GetId(), obj.Status)

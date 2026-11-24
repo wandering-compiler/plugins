@@ -302,13 +302,16 @@ func TestParallelCallsAreMatchedByCallID(t *testing.T) {
 	}
 }
 
-// A budget refusal gets its own code so the caller can tell "the model went
-// wide" from "the provider is down".
-func TestBudgetExhaustionIsItsOwnCode(t *testing.T) {
+// A spent tool budget is not a failed run: the model answers once more
+// without tools, and Finished says the answer is incomplete, and why — so the
+// caller can tell "the model went wide" from "the provider is down" and still
+// has the answer.
+func TestBudgetExhaustionFinishesIncomplete(t *testing.T) {
 	h := &AgentServiceHandler{StreamClient: &multiTurn{turns: [][]map[string]any{
 		{toolCallTurn(
 			[3]string{"a", "t", `{}`}, [3]string{"b", "t", `{}`}, [3]string{"c", "t", `{}`},
 		)},
+		{delta("Without them."), completedEvent(5)},
 	}}, DefaultModel: "gpt-4o", DefaultMaxTokens: 100}
 
 	b := &bidi{ctx: context.Background(), incoming: make(chan *pb.RunAgentReq, 4)}
@@ -316,10 +319,21 @@ func TestBudgetExhaustionIsItsOwnCode(t *testing.T) {
 	start.GetStart().Limits = &pb.Limits{MaxToolCalls: 2}
 	b.incoming <- start
 
-	err := h.RunAgent(b)
-	st, _ := status.FromError(err)
-	if st.Code() != codes.ResourceExhausted {
-		t.Errorf("code = %v, want ResourceExhausted", st.Code())
+	if err := h.RunAgent(b); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+	var fin *pb.Finished
+	for _, e := range b.events() {
+		if e.GetToolCall() != nil {
+			t.Error("a call of the over-budget round reached the caller")
+		}
+		if f := e.GetFinished(); f != nil {
+			fin = f
+		}
+	}
+	if fin == nil || fin.GetText() != "Without them." || fin.GetStatus() != pb.Status_STATUS_INCOMPLETE ||
+		fin.GetIncompleteReason() != pb.IncompleteReason_INCOMPLETE_REASON_TOOL_BUDGET_EXHAUSTED {
+		t.Errorf("finished = %+v", fin)
 	}
 }
 

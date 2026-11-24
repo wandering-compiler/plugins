@@ -65,6 +65,7 @@ type config struct {
 	attachListen   string
 	proxyListen    string
 	proxyAddress   string
+	internalAddr   string
 	certPath       string
 	keyPath        string
 	identityDir    string
@@ -148,6 +149,9 @@ func parseConfig(args []string, out io.Writer) (config, error) {
 		"address CALLERS send work to, redeeming the ticket the control plane granted")
 	fs.StringVar(&cfg.proxyAddress, "proxy-address", os.Getenv("RELAY_PROXY_ADDRESS"),
 		"host:port callers are told to send work to, as the OUTSIDE WORLD reaches it")
+	fs.StringVar(&cfg.internalAddr, "internal-address", os.Getenv("RELAY_INTERNAL_ADDRESS"),
+		"OPTIONAL host:port of the same endpoint on the relay's own network, handed to callers beside "+
+			"--proxy-address: a caller in the same stack dials it first and never goes out through the host")
 	fs.StringVar(&cfg.certPath, "cert", os.Getenv("RELAY_CERT"), "PEM certificate this relay presents")
 	fs.StringVar(&cfg.keyPath, "key", os.Getenv("RELAY_KEY"), "PEM private key for --cert")
 	fs.StringVar(&cfg.identityDir, "identity-dir", os.Getenv("RELAY_IDENTITY_DIR"),
@@ -423,6 +427,7 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 		Backends:         backends,
 		Codes:            regCodes,
 		ProxyAddress:     cfg.proxyAddress,
+		InternalAddress:  cfg.internalAddr,
 		ProxyFingerprint: relaydial.Fingerprint(leaf),
 		PollInterval:     cfg.pollInterval,
 	})

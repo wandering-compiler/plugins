@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
@@ -62,7 +61,7 @@ func (h *AuthServiceHandler) SetBotRoles(ctx context.Context, req *pb.SetBotRole
 		}
 	}
 	if len(ordered) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "role_ids is empty — a bot with no role holds a token that does nothing")
+		return nil, refusal(ctx, codes.InvalidArgument, "role_ids is empty — a bot with no role holds a token that does nothing", CodeBotRoleRequired, "role_ids", MsgBotRoleRequired, nil)
 	}
 	if _, err := h.operableBot(ctx, req.GetUserId()); err != nil {
 		return nil, err
@@ -73,7 +72,7 @@ func (h *AuthServiceHandler) SetBotRoles(ctx context.Context, req *pb.SetBotRole
 	}
 	for _, id := range ordered {
 		if !containsRole(allowed.GetRoles(), id) {
-			return nil, status.Error(codes.InvalidArgument, errRoleNotForBots.Error())
+			return nil, refusal(ctx, codes.InvalidArgument, errRoleNotForBots.Error(), CodeRoleNotForBots, "role_ids", MsgRoleNotForBots, nil)
 		}
 		if _, err := h.checkMayGrantRole(ctx, id); err != nil {
 			return nil, err

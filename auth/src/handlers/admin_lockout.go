@@ -92,7 +92,7 @@ func (h *AuthServiceHandler) DisableAccounts(ctx context.Context, req *pb.Disabl
 	}
 	ids := req.GetIds()
 	if len(ids) == 0 {
-		return nil, errEmptySelection
+		return nil, emptySelection(ctx)
 	}
 	if err := refuseOwnAccount(ctx, operator, ids); err != nil {
 		return nil, err
@@ -124,7 +124,7 @@ func (h *AuthServiceHandler) EnableAccounts(ctx context.Context, req *pb.EnableA
 	}
 	ids := req.GetIds()
 	if len(ids) == 0 {
-		return nil, errEmptySelection
+		return nil, emptySelection(ctx)
 	}
 	thumbprint := requestThumbprint(ctx)
 	for _, id := range ids {
