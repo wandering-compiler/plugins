@@ -70,6 +70,7 @@ It covers plugin version 0.1.0-rc.58 and the unreleased changes in `changes/`.
 | `user_admin` | off | — | — |
 | `admin_sign_ins` | off | `user_admin` | — |
 | `admin_devices` | off | `user_admin` | — |
+| `admin_accounts` | off | `user_admin`, `rbac`, `authenticate_turnkey` | — |
 | `admin_mfa` | off | `user_admin`, `two_factor` | — |
 | `my_sign_ins` | off | `authenticate_turnkey` | — |
 | `org_members_rest` | off | `org_membership`, `org_invite` | — |
@@ -1259,6 +1260,29 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | id | invariant | category | proof |
 |---|---|---|---|
 | admin_pages/opt-in | An activation that enables neither feature MUST get no `SignIns` or `Devices` page, and no page any activation gets MUST link to a page its own gate does not guarantee (a column ref cannot be gated, and a ref to an absent page fails the admin build). | Failure & configuration | `TestAdminPages_NewPagesAreOptIn` |
+
+### admin_accounts
+
+**Purpose.** The admin creates any account, acting realm-wide like the backoffice invitations: a person's account from the Users page, and with `service_account` a machine account from the ServiceAccounts page. A person's account starts with no usable password. The admin shows a one-time setup link once, and the person sets their own password through it, so nobody signs in to the account before that, the operator included.
+
+**Adds**
+- Table `AccountSetup` (the link's SHA-256 hash, the account, expiry, the operator; spent or superseded, never deleted) and its migration.
+- Service methods: `CreateAccount` (organization by slug, address, session-realm role; answers `setup_token`, and `setup_link` when `account_setup_url` is set), `IssueAccountSetupLink` (a new link for an account with no password yet; the earlier one stops working), `SetUpAccount` (unauthenticated: the link and a password, the sign-up's password rules), and with `service_account` `CreateServiceAccount` and `IssueServiceAccountToken` (CreateBot and IssueBotToken in the organization named, or the one the machine account belongs to).
+- REST: `POST /auth/account-setup` (`SetUpAccount`, `exclude_auth`, `public_limit: failed_only`). The other methods are bound by the admin pages only.
+- Admin actions: Users "Create account" and "Setup link"; ServiceAccounts "Create machine account" and "Issue token", each gated by the preset's own `feature:`.
+- Events: `AccountCreated`, `AccountSetUp`.
+- Env: `account_setup_url` (with `{token}`), `account_setup_ttl_hours` (72).
+
+**Requires / conflicts / combined files.** Requires `user_admin`, `rbac` and `authenticate_turnkey`. Go files: `handlers/admin_accounts.go` and `handlers/role_ceiling.go`. Combined files: `[admin_accounts, org_membership]` → `handlers/admin_accounts_org.go` (the organization by its slug, its lock), `[admin_accounts, service_account]` → `handlers/admin_accounts_bot.go`.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| admin_accounts/realm-wide-only | Every method MUST act only under the endpoint ACL, only for a signed-in person (never an API token), and from inside an organization only for a caller holding the method realm-wide. A refusal MUST write nothing. | Security | `TestCreateAccount_Refusals`, `TestIssueAccountSetupLink`, `TestIssueServiceAccountToken_Refusals` |
+| admin_accounts/role-ceiling | `CreateAccount` MUST refuse a role carrying anything the operator does not hold, checked again under the organization's lock, and `IssueAccountSetupLink` MUST refuse an account holding such a role: whoever holds the link acts as the account. | Security | `TestAdminAccounts_HeldToTheRoleCeiling` |
+| admin_accounts/no-password-before-setup | A created account MUST have no usable password until its owner sets one through the link; the row keeps only the link's hash. | Security | `TestCreateAccount_InTheNamedOrganizationWithASetupLink` |
+| admin_accounts/link-once | A link MUST set the first password once: a refused password leaves it usable, a spent, superseded or unknown link is the one `ACCOUNT_SETUP_INVALID`, and an account that already has a password gets no new link (`ACCOUNT_ALREADY_SET_UP`). | Security | `TestSetUpAccount_SetsTheFirstPasswordOnce`, `TestIssueAccountSetupLink` |
+| admin_accounts/named-organization | The account, its membership and its role grant MUST be in the organization the request names, not the operator's active one; a realm without organizations grants the role realm-wide and refuses a named organization. | Security | `TestCreateAccount_InTheNamedOrganizationWithASetupLink`, `TestCreateAccount_ARealmWithoutOrganizations`, `TestBotOrgIn_TheNamedOrganizationWins`, `TestIssueServiceAccountToken_AnAccountOfNoOrganization` |
+| admin_accounts/create-atomic | The account, its membership, its grant and its link MUST commit together or not at all. | Consistency & concurrency | none (one `inTx`; a live test would fail the link write and show no account is left). |
 
 ### admin_mfa
 

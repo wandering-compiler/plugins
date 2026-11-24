@@ -270,3 +270,50 @@ func TestIssueServiceAccountToken_AnAccountOfNoOrganization(t *testing.T) {
 		t.Errorf("no organization: %v, want PermissionDenied", err)
 	}
 }
+
+// adminAccountsCeilingMock is adminAccountsMock with a catalogue the ceiling
+// can refuse: "member" carries nothing, "owner" is the organization's wildcard,
+// and every account holds "owner".
+type adminAccountsCeilingMock struct {
+	*adminAccountsMock
+}
+
+func (m adminAccountsCeilingMock) ListOrgScopedRoles(context.Context, *pb.ListOrgScopedRolesReq, ...grpc.CallOption) (*pb.ListOrgScopedRolesResp, error) {
+	return &pb.ListOrgScopedRolesResp{Roles: []*pb.OrgScopedRole{{Id: "role-1", Name: "member"}, {Id: "role-owner", Name: "owner"}}}, nil
+}
+
+func (m adminAccountsCeilingMock) ListOrgRoleRows(ctx context.Context, _ *pb.ListOrgRoleRowsReq, _ ...grpc.CallOption) (*pb.ListOrgRoleRowsResp, error) {
+	return rowsFromScoped(m.ListOrgScopedRoles(ctx, &pb.ListOrgScopedRolesReq{}))
+}
+
+func (m adminAccountsCeilingMock) ListRoleGrants(context.Context, *pb.ListRoleGrantsReq, ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
+	return &pb.ListRoleGrantsResp{Grants: []*pb.RoleGrant{{RoleId: "role-1"}, {RoleId: "role-owner", AllPermissions: true}}}, nil
+}
+
+func (m adminAccountsCeilingMock) GetUserRoleGrants(context.Context, *pb.GetUserRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserRoleGrantsResp, error) {
+	return &pb.GetUserRoleGrantsResp{Grants: []*pb.RoleGrant{{RoleId: "role-owner", AllPermissions: true}}}, nil
+}
+
+// The admin cannot create an account above itself, nor hand out the setup
+// link of one: whoever holds the link acts as the account. A refusal writes
+// nothing.
+func TestAdminAccounts_HeldToTheRoleCeiling(t *testing.T) {
+	h, inner := newAdminAccounts(false)
+	m := adminAccountsCeilingMock{inner}
+	h.Query, h.Mutation = m, m
+	// ctxWithCaller holds permission 5 only; the lock allocates 1–4, so the
+	// wildcard carries what ops does not hold.
+	ops := ctxWithCaller("ops")
+
+	if _, err := h.CreateAccount(ops, &pb.CreateAccountReq{Org: "acme", Email: "boss@acme.example", Role: "owner"}); refusalCodeOf(err) != CodeRoleAboveCaller || len(inner.created) != 0 || len(inner.setups) != 0 {
+		t.Errorf("creating an owner: err = %v, created %v — want %s and nothing written", err, inner.created, CodeRoleAboveCaller)
+	}
+	created, err := h.CreateAccount(ops, &pb.CreateAccountReq{Org: "acme", Email: "x@acme.example", Role: "member"})
+	if err != nil || len(inner.created) != 1 {
+		t.Fatalf("a role within the ceiling: %v, created %v", err, inner.created)
+	}
+	before := len(inner.setups)
+	if _, err := h.IssueAccountSetupLink(ops, &pb.IssueAccountSetupLinkReq{Ids: []string{created.GetUserId()}}); refusalCodeOf(err) != CodeRoleAboveCaller || len(inner.setups) != before {
+		t.Errorf("a setup link of an account holding owner: err = %v — want %s and no new link", err, CodeRoleAboveCaller)
+	}
+}
