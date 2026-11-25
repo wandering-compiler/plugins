@@ -21,4 +21,5 @@ Every method acts only under the endpoint ACL, from inside an organization
 only for a caller holding it realm-wide, and holds the role to the operator's
 ceiling. New events `AccountCreated` and `AccountSetUp`; a migration adds the
 `AccountSetup` table. Needs a w17 compiler that knows a preset action's and
-picker's own `feature:` (0.2).
+picker's own `feature:` (0.2), and SDK v0.2.0 (`requires_sdk`): move a project
+with `w17ctl codegen-version v0.2` before updating the plugin.

@@ -1,7 +1,7 @@
 name: auth
 version: 0.1.1
 requires_w17: ">=1.18"
-requires_sdk: v0.1.0-rc.73
+requires_sdk: v0.2.2
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
