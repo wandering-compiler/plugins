@@ -20,6 +20,8 @@ creates accounts from the admin, in whichever organization they name.
 Every method acts only under the endpoint ACL, from inside an organization
 only for a caller holding it realm-wide, and holds the role to the operator's
 ceiling. New events `AccountCreated` and `AccountSetUp`; a migration adds the
-`AccountSetup` table. Needs a w17 compiler that knows a preset action's and
-picker's own `feature:` (0.2), and SDK v0.2.0-rc.3 (`requires_sdk`): move a project
-with `w17ctl codegen-version v0.2` before updating the plugin.
+`AccountSetup` table. Needs plugin platform 1.19 (`requires_w17`), where a
+preset action and picker carry their own `feature:` — the 0.2 compiler — and
+SDK v0.2.0-rc.3 (`requires_sdk`): move a project with
+`w17ctl codegen-version v0.2` before updating the plugin. On an older compiler
+the plugin is refused by its platform version.
