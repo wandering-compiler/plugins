@@ -1,5 +1,5 @@
 name: agent
-version: 0.1.0
+version: 0.1.1
 requires_w17: ">=1.14"
 requires_sdk: v0.1.0-rc.24
 

@@ -1,5 +1,0 @@
-### A spent tool budget ends a run with an answer, and a failing provider falls back to another model
-
-**Tool budget.** When a RunAgent round would go over `Limits.max_tool_calls`, none of its calls run, as before. The run no longer fails with `ResourceExhausted`: each call is answered to the model as not run, the model gets one more turn without tools, and its answer comes back as `Finished` with status INCOMPLETE and the new reason `TOOL_BUDGET_EXHAUSTED`.
-
-**Fallbacks.** `ModelSpec.fallbacks` lists models to try, in order, when a call fails at the provider: rate-limited (429), failing (5xx, or a response marked `server_error` / `rate_limit_exceeded`), or unreachable. A request the provider refused is not retried, and neither is the caller's own timeout. Complete retries in place. CompleteStream and RunAgent first send a new `Restart{attempt, reason, model}` event: everything streamed by the failed attempt is void, and the answer leaves it out. RunAgent stays on the fallback for the rest of the run. Every attempt is recorded as a call under its own model. A fallback's own `fallbacks` are refused.
