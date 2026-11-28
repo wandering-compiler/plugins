@@ -2900,6 +2900,55 @@ service AuthService {
   rpc SetOrgTeamRoles(SetOrgTeamRolesReq) returns (SetOrgTeamRolesResp) {
     option (w17.contrib.plugin_feature_rpc) = "teams";
   }
+
+  // CreateAccount — the admin's "Create account": a person's account, created
+  // by an operator acting realm-wide (as InviteToOrgAdmin), in the
+  // organization the request names by its slug (`org`, required where the
+  // realm has organizations) with the role it names, held to the operator's
+  // ceiling. The account has no usable password: the answer carries a
+  // one-time setup link (setup_token, and setup_link when the deployment
+  // configures account_setup_url), shown once, through which the person sets
+  // it (SetUpAccount). Gated admin_accounts; from inside an organization only
+  // for a caller holding the method realm-wide, and only under the endpoint
+  // ACL.
+  rpc CreateAccount(CreateAccountReq) returns (CreateAccountResp) {
+    option (w17.contrib.plugin_feature_rpc) = "admin_accounts";
+  }
+  // IssueAccountSetupLink — the Users page's "Setup link": a new one-time
+  // setup link for an account an operator created whose owner has not set a
+  // password yet (a lost or lapsed link). The account's earlier links stop
+  // working. Exactly one id. Refuses an account that has a password, a
+  // machine account, a disabled or an erased one. Gated admin_accounts,
+  // realm-wide as CreateAccount.
+  rpc IssueAccountSetupLink(IssueAccountSetupLinkReq) returns (IssueAccountSetupLinkResp) {
+    option (w17.contrib.plugin_feature_rpc) = "admin_accounts";
+  }
+  // SetUpAccount — the setup link's page: set the first password of an
+  // account an operator created, with the link's token. Unauthenticated (the
+  // person has no password yet); the link is spent by the same statement
+  // that finds it, and a spent, superseded, lapsed or unknown link is one
+  // answer (ACCOUNT_SETUP_INVALID). The password meets the sign-up's rules.
+  // The person then signs in as anyone does. Gated admin_accounts.
+  rpc SetUpAccount(SetUpAccountReq) returns (SetUpAccountResp) {
+    option (w17.contrib.plugin_feature_rpc) = "admin_accounts";
+  }
+  // CreateServiceAccount — the admin's "Create machine account": CreateBot
+  // for an operator acting realm-wide, into the organization the request
+  // names by its slug (`org`, required where the realm has organizations),
+  // with an API-realm role held to the operator's ceiling. Gated
+  // admin_accounts with service_account.
+  rpc CreateServiceAccount(CreateServiceAccountReq) returns (CreateServiceAccountResp) {
+    option (w17.contrib.plugin_feature_rpc) = "admin_accounts";
+  }
+  // IssueServiceAccountToken — the ServiceAccounts page's "Issue token":
+  // IssueBotToken for an operator acting realm-wide, for exactly one machine
+  // account (ids), in whichever organization it belongs to. The token is
+  // shown once. Without public_key a bearer token, expiring within a year;
+  // with one, bound to the account's one key. Gated admin_accounts with
+  // service_account.
+  rpc IssueServiceAccountToken(IssueServiceAccountTokenReq) returns (IssueServiceAccountTokenResp) {
+    option (w17.contrib.plugin_feature_rpc) = "admin_accounts";
+  }
 }
 
 // ── password_reset / email_verification business messages ───────
@@ -3153,4 +3202,69 @@ message ListMyOrgsResp {
   // Reuses the query-tier view (this proto imports queries/auth_query.proto).
   repeated UserOrg orgs = 1;
 
+}
+
+message CreateAccountReq {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  // The organization's slug; required where the realm has organizations,
+  // empty where it has none.
+  string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string email = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  // The role's name: a session-realm role, in the organization where the
+  // realm has organizations (as an invitation's role), realm-wide where it
+  // has none.
+  string role = 3 [(w17.field) = { type: SLUG, max_len: 100 }];
+}
+message CreateAccountResp {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  // The link's secret, shown once.
+  string setup_token = 2 [(w17.field) = { blank: true, sensitive: true }];
+  // account_setup_url with the token in it; empty when not configured.
+  string setup_link = 3 [(w17.field) = { blank: true, sensitive: true }];
+  google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
+}
+message IssueAccountSetupLinkReq {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  repeated string ids = 1;
+}
+message IssueAccountSetupLinkResp {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string setup_token = 1 [(w17.field) = { blank: true, sensitive: true }];
+  string setup_link = 2 [(w17.field) = { blank: true, sensitive: true }];
+  google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
+}
+message SetUpAccountReq {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string token = 1 [(w17.field) = { type: CHAR, max_len: 128, sensitive: true }];
+  string password = 2 [(w17.field) = { type: PASSWORD }];
+}
+message SetUpAccountResp {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string email = 1;
+}
+message CreateServiceAccountReq {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string email = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  // The API-realm role's name (ListBotRoles lists them).
+  string role = 3 [(w17.field) = { type: SLUG, max_len: 100 }];
+}
+message CreateServiceAccountResp {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message IssueServiceAccountTokenReq {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  repeated string ids = 1;
+  string name = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
+  string public_key = 4 [(w17.field) = { type: CHAR, max_len: 1024, blank: true }];
+}
+message IssueServiceAccountTokenResp {
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+  string token = 1 [(w17.field) = { blank: true, sensitive: true }];
+  string token_id = 2 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
+  bool bearer = 4;
 }

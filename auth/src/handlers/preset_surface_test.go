@@ -142,6 +142,8 @@ func presetSurface(t *testing.T, manifest string) map[string]string {
 		out                   = map[string]string{}
 		ofPage                = map[string]string{} // entry → its page
 		pageFeature           = map[string]string{}
+		actionFeature         = map[string]string{} // action entry → its own gate
+		action                string
 		section, prefix, page string
 		slotParent            string
 		inActions             bool
@@ -188,7 +190,12 @@ func presetSurface(t *testing.T, manifest string) map[string]string {
 			case line == "        actions:":
 				inActions = true
 			case inActions && strings.HasPrefix(line, "          - name: "):
-				ofPage["action "+page+" "+strings.TrimPrefix(line, "          - name: ")] = page
+				action = "action " + page + " " + strings.TrimPrefix(line, "          - name: ")
+				ofPage[action] = page
+			case inActions && action != "" && strings.HasPrefix(line, "            feature: "):
+				// An action's own gate (it is injected only with that feature)
+				// wins over its page's.
+				actionFeature[action] = strings.TrimPrefix(line, "            feature: ")
 			case !inActions && slot.MatchString(line):
 				ofPage["slot "+page+" "+slotParent+"."+slot.FindStringSubmatch(line)[1]] = page
 			}
@@ -196,6 +203,9 @@ func presetSurface(t *testing.T, manifest string) map[string]string {
 	}
 	for k, p := range ofPage {
 		out[k] = pageFeature[p]
+		if f, ok := actionFeature[k]; ok {
+			out[k] = f
+		}
 	}
 	return out
 }

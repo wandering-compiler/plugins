@@ -2552,3 +2552,29 @@ message OrgProductPlanAssignment {
   string ended_by    = 7 [(w17.field) = { type: UUID, null: true }];
   string ended_key   = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }
+
+// AccountSetup — the one-time link an operator's admin hands a person whose
+// account it created (AuthService.CreateAccount, IssueAccountSetupLink): the
+// account exists with no usable password, and following the link is the only
+// way to give it one (AuthService.SetUpAccount). The token is stored hashed
+// and shown once, as an invitation's is. A link is spent by setting the
+// password (used_at), ended by a newer one (superseded_at), and lapses at
+// expires_at; nothing is deleted. Gated admin_accounts.
+message AccountSetup {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "admin_accounts";
+
+  string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id = 2 [
+    (w17.field) = { type: UUID },
+    (w17.db.column) = { fk: "@module.User", deletion_rule: BLOCK, index: true }
+  ];
+  // sha256 hex of the link's token. The plaintext never reaches the database.
+  string token_hash = 3 [(w17.field) = { type: CHAR, max_len: 128, unique: true }];
+  google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
+  // The operator who issued the link.
+  string created_by = 5 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp used_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp superseded_at = 8 [(w17.field) = { type: DATETIME, null: true }];
+}

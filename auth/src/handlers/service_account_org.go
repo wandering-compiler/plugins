@@ -19,7 +19,14 @@ func init() {
 		enroll:   enrollBotInOrg,
 		accounts: orgMemberAccounts,
 		isMember: isOrgMember,
-		lock:     lockBotOrg,
+		isMemberOf: func(ctx context.Context, h *AuthServiceHandler, userID, orgID string) (bool, error) {
+			resp, err := h.Query.GetOrgMember(ctx, &pb.GetOrgMemberReq{UserId: userID, OrgId: orgID})
+			if err != nil {
+				return false, err
+			}
+			return resp.GetUserId() != "", nil
+		},
+		lock: lockBotOrg,
 	}
 }
 
