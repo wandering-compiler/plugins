@@ -22,6 +22,6 @@ only for a caller holding it realm-wide, and holds the role to the operator's
 ceiling. New events `AccountCreated` and `AccountSetUp`; a migration adds the
 `AccountSetup` table. Needs plugin platform 1.19 (`requires_w17`), where a
 preset action and picker carry their own `feature:` — the 0.2 compiler — and
-SDK v0.2.0-rc.3 (`requires_sdk`): move a project with
+SDK v0.2.2 (`requires_sdk`), the 0.2 release: move a project with
 `w17ctl codegen-version v0.2` before updating the plugin. On an older compiler
 the plugin is refused by its platform version.
