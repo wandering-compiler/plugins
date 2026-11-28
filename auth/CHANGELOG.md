@@ -1,5 +1,63 @@
 # auth — changelog
 
+## 0.2.0
+
+### The admin creates any account (admin_accounts)
+
+New feature `admin_accounts`, off by default: an operator acting realm-wide
+creates accounts from the admin, in whichever organization they name.
+
+- **A person's account** — the Users page's "Create account" (organization,
+  address, role; `AuthService.CreateAccount`). The account has no usable
+  password: the admin shows a one-time setup link once, and the person sets a
+  password through it (`POST /auth/account-setup`, `AuthService.SetUpAccount`,
+  the sign-up's password rules). Nobody signs in to the account before that,
+  the operator included. "Setup link" on an account's detail replaces a lost or
+  lapsed link (`AuthService.IssueAccountSetupLink`). `account_setup_url` (with
+  `{token}`) builds the link the admin shows; `account_setup_ttl_hours` (72)
+  is how long it works.
+- **A machine account**, with `service_account` — the ServiceAccounts page's
+  "Create machine account" and, on its detail, "Issue token", shown once
+  (`AuthService.CreateServiceAccount`, `IssueServiceAccountToken`): CreateBot
+  and IssueBotToken in the organization named, every rule of theirs kept.
+
+Every method acts only under the endpoint ACL, from inside an organization
+only for a caller holding it realm-wide, and holds the role to the operator's
+ceiling. New events `AccountCreated` and `AccountSetUp`; a migration adds the
+`AccountSetup` table. Needs plugin platform 1.19 (`requires_w17`), where a
+preset action and picker carry their own `feature:` — the 0.2 compiler — and
+SDK v0.2.2 (`requires_sdk`), the 0.2 release: move a project with
+`w17ctl codegen-version v0.2` before updating the plugin. On an older compiler
+the plugin is refused by its platform version.
+
+### The manifest names the SDK its handlers need
+
+`plugin.yaml` now declares `requires_sdk`, the sdk/go version the plugin's Go
+handlers are built against: v0.2.2 from this release (with `admin_accounts`). A project whose sdk/go pin is older
+is told at codegen to move it; a console refuses to sign a release of a
+plugin with Go handlers that does not say this.
+
+### Invitation, registration, machine-account and admin refusals speak to the person
+
+Fourteen refusals that sent only the operator's text (so a person read the
+generic sentence for the status code) now carry a code and a sentence of
+their own, translated through the project's catalog and declared in
+`plugin.yaml`'s `msgids:`:
+
+- invitations: `INVITE_INVALID` (one sentence for every cause — expired,
+  accepted, another account, unknown), `INVITE_ROLE_CHANGED`;
+- registration: `SIGNUP_CONFIRM_INVALID` (one sentence for every cause);
+- organizations: `ORGANIZATION_REQUIRED` (no organization chosen),
+  `ORGANIZATION_UNKNOWN` (backoffice);
+- machine accounts: `MACHINE_ACCOUNT_DISABLED`, `NOT_A_MACHINE_ACCOUNT` (one
+  sentence for "a person", "not in your organization" and "no such account"),
+  `MACHINE_ACCOUNT_EMAIL_REQUIRED`, `MACHINE_ACCOUNT_ROLE_REQUIRED`,
+  `ROLE_NOT_FOR_MACHINE_ACCOUNTS`;
+- admin bulk actions: `EMPTY_SELECTION`.
+
+The gRPC codes and the operator messages are unchanged, and code that checks
+for these refusals with `errors.Is` still matches them.
+
 ## 0.1.1
 
 ### The first_user bootstrap goes to the first person, not a seeded machine account
