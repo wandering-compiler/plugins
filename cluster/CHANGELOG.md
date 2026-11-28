@@ -1,5 +1,35 @@
 # cluster — changelog
 
+## 0.1.2
+
+### A caller in the relay's own stack reaches it without leaving the host
+
+A grant now carries, beside the public address (`address`), the relay's
+address on its own network (`TaskGranted.internal_address`). The deploy block
+sets it with `RELAY_INTERNAL_ADDRESS` to the callers port on the stack's
+network, and a relay run by hand takes `--internal-address`.
+`lib/relaydial.DialGranted` dials the internal address first and falls back
+to the public one, each pinned to the grant's fingerprint.
+
+Before, a caller in the same stack (another domain leasing browsers) could
+only dial the public address. That is the host's own public IP, which Docker
+does not translate back into the stack. On a host whose firewall denies
+incoming traffic by default the call was dropped, and the lease failed, while
+the deploy reported the worker admitted. A caller that keeps dialling
+`address` itself still needs the host rule `allow in on docker_gwbridge to
+any port <published port>`.
+
+### The manifest names the SDK its handlers need
+
+`plugin.yaml` now declares `requires_sdk: v0.1.0-rc.73`, the sdk/go version the
+plugin's Go handlers are built against. A project whose sdk/go pin is older
+is told at codegen to move it; a console refuses to sign a release of a
+plugin with Go handlers that does not say this.
+
+### The backoffice's refusals are translatable sentences
+
+The relay and worker actions an operator presses in the backoffice now refuse with a stable code and a sentence from the plugin's `msgids:`, which a project's catalogs carry for translation: a registration code for other than one relay, a relay or worker no longer registered, and an empty selection. The relay and worker wire, and a service reserving work, keep the operator's text.
+
 ## 0.1.1
 
 ### A caller reaching its deadline is no longer counted as the relay failing
